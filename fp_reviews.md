@@ -51,3 +51,23 @@ What is our tech stack for this project?
 2. Node.js with Express.js - Backend API helps manage asynchronous operations and handling swipe workload, also helps with rendering
 3. PostgreSQL - The primary relational database which will be used for profile data, interactions and matches.
 4. Redis - In-memory caching and session management, this helps keep the real time swipe fast and prevent bot spam
+
+[FP3] 9/29/2026
+### This assignment focuses on account creation.
+When a person creates an account we will ask them a questionnaire, the answers from that questionnaire will
+eventually be used in a future implementation of a match-match system that matches people through a percentage.
+
+Questionnaire outline (first pass):
+- Basics: name, date of birth, gender
+- Intent: sexual orientation, relationship goal
+- Values and interests: what actually matters to them in a partner
+- Lifestyle: schedule, habits, kids, smoking/drinking
+- Location: city/coordinates plus the age range and distance they are looking for
+- Photos: at least one photo, connects to the honesty/verification work from FP1
+
+How this connects to the match percentage
+- The feed already shows a percentage today, it comes from scoreCompatibility in
+  matchmakerApp/apps/mobile/src/utils/matching.ts, we are keeping those weights for now and not changing them
+- The questionnaire is the data we will need later, the real scoring stays in the Matching and Feed engine
+  from FP2 so weights can be tuned without shipping an app update
+- This assignment is only about collecting the answers, the percentage math is future work

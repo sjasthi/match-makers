@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Match Makers",
+    "slug": "match-makers",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FF6B6B"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.matchmakers.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to take profile photos",
+        "NSPhotoLibraryUsageDescription": "This app accesses the photo library to select profile photos",
+        "NSLocationWhenInUseUsageDescription": "This app uses location to find matches nearby"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FF6B6B"
+      },
+      "package": "com.matchmakers.app",
+      "permissions": ["CAMERA", "ACCESS_FINE_LOCATION"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you upload profile pictures",
+          "cameraPermission": "The app accesses your camera to let you take profile pictures"
+        }
+      ]
+    ]
+  }
+}
