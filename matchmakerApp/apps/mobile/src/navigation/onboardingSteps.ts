@@ -1,11 +1,17 @@
 import type { OnboardingStackParamList } from './types';
 
-/** Which onboarding step fixes a given missing profile section. */
+/**
+ * Which onboarding step fixes a given missing profile section.
+ *
+ * Keys must match the sections `getMissingProfileSections` returns. The
+ * questionnaire is not in here because it is not an onboarding concern any
+ * more: it is answered in the feed, once account creation is done.
+ */
 export const STEP_FOR_SECTION: Record<string, keyof OnboardingStackParamList> = {
   bio: 'Basics',
   photos: 'Photos',
-  preferences: 'Preferences',
   location: 'Location',
+  preferences: 'Location',
 };
 
 /**

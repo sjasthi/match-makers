@@ -43,6 +43,7 @@ export function useFeed() {
   const state = useFeedStore((store) => store.state);
   const error = useFeedStore((store) => store.error);
   const hasMore = useFeedStore((store) => store.hasMore);
+  const blockedReason = useFeedStore((store) => store.blockedReason);
   const lastMatch = useFeedStore((store) => store.lastMatch);
   const load = useFeedStore((store) => store.load);
   const loadMore = useFeedStore((store) => store.loadMore);
@@ -54,6 +55,7 @@ export function useFeed() {
     state,
     error,
     hasMore,
+    blockedReason,
     lastMatch,
     load,
     loadMore,

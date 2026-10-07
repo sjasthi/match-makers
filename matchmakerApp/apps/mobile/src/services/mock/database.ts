@@ -1,8 +1,18 @@
 import type { SwipeAction, User } from '@match-makers/shared';
 import { persistentStore, readJson, writeJson } from '@/services/storage/keyValueStore';
+import { normaliseStateUsers } from './migrate';
 import { DEMO_EMAIL, generateDemoUser, generateMockUsers } from '@/utils/mockData';
 
-const DB_KEY = 'mock.db.v1';
+/**
+ * Storage key for the mock blob.
+ *
+ * This was bumped to v2 when `User` gained the questionnaire. Since then the
+ * questionnaire has changed shape again (interest tags became tagged prompts,
+ * and kids moved out of lifestyle) and that is handled by normalising records
+ * on load rather than by bumping this key again, because bumping it throws away
+ * every account, swipe and message the user had.
+ */
+const DB_KEY = 'mock.db.v2';
 const SEED_CANDIDATE_COUNT = 20;
 
 export type StoredUser = User & { password: string };
@@ -57,7 +67,7 @@ function createInitialState(): MockState {
  * Postgres + Redis backend. Everything is seeded on first launch so the
  * prototype has content to show without a server.
  */
-class MockDatabase {
+export class MockDatabase {
   private state: MockState | null = null;
   private ready: Promise<MockState> | null = null;
 
@@ -67,8 +77,15 @@ class MockDatabase {
       (state) => {
         // A schema change or a wiped install can leave the array shape stale.
         const needsReseed = !Array.isArray(state.users) || state.users.length === 0;
-        this.state = needsReseed ? createInitialState() : state;
-        if (needsReseed) void this.persist();
+        const loaded = needsReseed ? createInitialState() : state;
+
+        // Upgrade stored records written by an older build. A record whose
+        // questionnaire predates the current shape otherwise reaches the
+        // scoring code with fields missing and crashes on `.length` or `.map`.
+        const { users, changed } = normaliseStateUsers(loaded.users);
+        this.state = { ...loaded, users: users as StoredUser[] };
+
+        if (needsReseed || changed) void this.persist();
         return this.state;
       }
     );

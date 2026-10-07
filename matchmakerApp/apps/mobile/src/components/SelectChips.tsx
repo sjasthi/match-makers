@@ -15,6 +15,8 @@ interface Props<T extends string> {
   error?: boolean;
   helperText?: string;
   multiple?: boolean;
+  /** Scopes the group for tests when the same chip label appears twice. */
+  testID?: string;
 }
 
 export function SelectChips<T extends string>({
@@ -25,9 +27,10 @@ export function SelectChips<T extends string>({
   error,
   helperText,
   multiple = true,
+  testID,
 }: Props<T>) {
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID={testID}>
       <Text variant="labelLarge" style={styles.label}>
         {label}
       </Text>

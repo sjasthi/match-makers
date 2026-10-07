@@ -1,13 +1,15 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { COLORS } from '@/constants';
+import { useAuthStore } from '@/stores/authStore';
 import { ProfileScreen } from '@/screens/main/ProfileScreen';
 import { EditProfileScreen } from '@/screens/profile/EditProfileScreen';
-import { PreferencesScreen } from '@/screens/onboarding/PreferencesScreen';
+import { PreferencesScreen } from '@/screens/profile/PreferencesScreen';
+import { MatchProfileScreen } from '@/screens/profile/MatchProfileScreen';
 import { SettingsScreen } from '@/screens/profile/SettingsScreen';
 import { VerificationScreen } from '@/screens/profile/VerificationScreen';
 import { ProfileDetailScreen } from '@/screens/profile/ProfileDetailScreen';
+import { AdminUsersScreen } from '@/screens/admin/AdminUsersScreen';
+import { AdminUserDetailScreen } from '@/screens/admin/AdminUserDetailScreen';
 import type { ProfileStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
@@ -35,8 +37,13 @@ export function ProfileNavigator() {
       />
       <Stack.Screen
         name="Preferences"
-        component={ProfilePreferencesScreen}
+        component={PreferencesScreen}
         options={{ title: 'Discovery preferences' }}
+      />
+      <Stack.Screen
+        name="MatchProfile"
+        component={ProfileMatchScreen}
+        options={{ title: 'Match profile' }}
       />
       <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
       <Stack.Screen
@@ -49,12 +56,22 @@ export function ProfileNavigator() {
         component={ProfileDetailScreen}
         options={{ title: 'Profile' }}
       />
+      <Stack.Screen
+        name="AdminUsers"
+        component={AdminUsersScreen}
+        options={{ title: 'All users' }}
+      />
+      <Stack.Screen
+        name="AdminUserDetail"
+        component={AdminUserDetailScreen}
+        options={{ title: 'User record' }}
+      />
     </Stack.Navigator>
   );
 }
 
-/** Preferences reuses the onboarding screen, so it needs a different exit. */
-function ProfilePreferencesScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<ProfileStackParamList>>();
-  return <PreferencesScreen onComplete={() => navigation.goBack()} />;
+/** Reads the questionnaire off the signed-in user rather than fetching it. */
+function ProfileMatchScreen() {
+  const user = useAuthStore((store) => store.user);
+  return <MatchProfileScreen questionnaire={user?.questionnaire} />;
 }

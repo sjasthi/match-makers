@@ -1,4 +1,4 @@
-import type { SwipeAction } from './index';
+import type { DistanceMode, SwipeAction } from './index';
 
 export type ApiErrorCode =
   | 'UNAUTHORIZED'
@@ -36,6 +36,12 @@ export interface Paginated<T> {
 export interface FeedQuery {
   page?: number;
   pageSize?: number;
+  /**
+   * Documented for completeness. The server reads the caller's own stored
+   * preferences to build a deck, so the client does not send any of these --
+   * they exist here to pin the shape of the filtering the endpoint applies.
+   */
+  distanceMode?: DistanceMode;
   maxDistance?: number;
   minAge?: number;
   maxAge?: number;

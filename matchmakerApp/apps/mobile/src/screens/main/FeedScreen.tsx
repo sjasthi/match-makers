@@ -13,18 +13,25 @@ import {
   ErrorBanner,
 } from '@/components';
 import { useCurrentUser, useFeed } from '@/hooks';
+import { MatchSetup } from '@/screens/prompts/MatchSetup';
+import { hasCompleteQuestionnaire } from '@/services/profile';
 import { COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { RootStackParamList } from '@/navigation/types';
 
 export function FeedScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const viewer = useCurrentUser();
+  // Nobody is matched until the questionnaire is answered. Showing a deck with
+  // percentages on it before then implies a match we have no basis for, and
+  // scoring would be reading an empty questionnaire.
+  const isMatchable = hasCompleteQuestionnaire(viewer);
   const {
     profiles,
     current,
     state,
     error,
     hasMore,
+    blockedReason,
     lastMatch,
     load,
     loadMore,
@@ -34,14 +41,15 @@ export function FeedScreen() {
 
   // Top up the deck before the user runs out of cards to swipe.
   useEffect(() => {
+    if (!isMatchable) return;
     if (hasMore && profiles.length <= 3 && state !== 'loading') {
       void loadMore();
     }
-  }, [hasMore, profiles.length, state, loadMore]);
+  }, [isMatchable, hasMore, profiles.length, state, loadMore]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (isMatchable) void load();
+  }, [isMatchable, load]);
 
   // Keep the queue warm when returning from another tab.
   useFocusEffect(
@@ -71,6 +79,13 @@ export function FeedScreen() {
   }
 
   const showEmptyState = state !== 'loading' && profiles.length === 0;
+  // Named from the server/mock response rather than guessed here. The old copy
+  // told people to widen their distance unconditionally, which was advice about
+  // a setting that was collected, displayed and never actually applied.
+  const emptyTitle = blockedReason ? 'Nobody fits your filters' : 'No profiles yet';
+  const emptyMessage =
+    blockedReason ??
+    'There is nobody else here yet. Check back soon, or share your profile with more people.';
 
   return (
     <ScreenContainer padded={false}>
@@ -83,51 +98,68 @@ export function FeedScreen() {
         </Text>
       </View>
 
-      <View style={styles.body}>
-        {error ? <ErrorBanner message={error} onRetry={() => void load()} /> : null}
+      {/*
+        The questionnaire session lives here rather than on its own route, so
+        answering a step advances without a navigation round trip and there is
+        no "go back, open prompts again" loop.
+      */}
+      {!isMatchable ? (
+        <View style={styles.body}>
+          <MatchSetup onComplete={() => void load({ refresh: true })} />
+        </View>
+      ) : null}
 
-        {showEmptyState ? (
-          <EmptyState
-            icon="🗺️"
-            title="No profiles yet"
-            message="Nobody matches your current filters. Try widening the age range or distance in settings."
-            actionLabel="Reload"
-            onAction={() => void load({ refresh: true })}
-          />
-        ) : current ? (
-          <View style={styles.deck}>
-            {/* Render the next card underneath so the deck feels physical. */}
-            {profiles[1] ? (
-              <View style={styles.nextCard} pointerEvents="none">
-                <SwipeCard
-                  user={profiles[1]}
-                  viewer={viewer}
-                  onLike={() => undefined}
-                  onPass={() => undefined}
-                  onSuperLike={() => undefined}
-                  enabled={false}
-                />
-              </View>
-            ) : null}
+      {isMatchable ? (
+        <View style={styles.body}>
+          {error ? <ErrorBanner message={error} onRetry={() => void load()} /> : null}
 
-            <SwipeCard
-              user={current}
-              viewer={viewer}
-              onLike={() => onSwipe('like')}
-              onPass={() => onSwipe('pass')}
-              onSuperLike={() => onSwipe('super_like')}
-              onOpenDetail={() =>
-                navigation.navigate('Profile', {
-                  screen: 'ProfileDetail',
-                  params: { userId: current.id, user: current },
-                })
+          {showEmptyState ? (
+            <EmptyState
+              icon="🗺️"
+              title={emptyTitle}
+              message={emptyMessage}
+              actionLabel={blockedReason ? 'Adjust preferences' : 'Reload'}
+              onAction={() =>
+                blockedReason
+                  ? navigation.navigate('Profile', { screen: 'Preferences' })
+                  : void load({ refresh: true })
               }
             />
-          </View>
-        ) : null}
-      </View>
+          ) : current ? (
+            <View style={styles.deck}>
+              {/* Render the next card underneath so the deck feels physical. */}
+              {profiles[1] ? (
+                <View style={styles.nextCard} pointerEvents="none">
+                  <SwipeCard
+                    user={profiles[1]}
+                    viewer={viewer}
+                    onLike={() => undefined}
+                    onPass={() => undefined}
+                    onSuperLike={() => undefined}
+                    enabled={false}
+                  />
+                </View>
+              ) : null}
 
-      {current ? (
+              <SwipeCard
+                user={current}
+                viewer={viewer}
+                onLike={() => onSwipe('like')}
+                onPass={() => onSwipe('pass')}
+                onSuperLike={() => onSwipe('super_like')}
+                onOpenDetail={() =>
+                  navigation.navigate('Profile', {
+                    screen: 'ProfileDetail',
+                    params: { userId: current.id, user: current },
+                  })
+                }
+              />
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {isMatchable && current ? (
         <View style={styles.actions}>
           <SwipeActions
             onPass={() => onSwipe('pass')}

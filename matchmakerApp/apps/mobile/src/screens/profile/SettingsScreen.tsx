@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
 import { Text } from 'react-native-paper';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenContainer, ErrorBanner, AuthModeSwitcher, AppIcon } from '@/components';
 import { useAuthMode } from '@/hooks';
 import { mockDb } from '@/services/mock/database';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
+import type { ProfileStackParamList } from '@/navigation/types';
+
+type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Settings'>;
 
 export function SettingsScreen() {
+  const navigation = useNavigation<Nav>();
   const [authMode, changeAuthMode] = useAuthMode();
+  const isMock = authMode === 'mock';
   const [notifications, setNotifications] = useState(true);
   const [showMe, setShowMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +70,8 @@ export function SettingsScreen() {
             <AuthModeSwitcher value={authMode} onChange={changeAuthMode} />
           </View>
 
+          <AdminRow enabled={isMock} onPress={() => navigation.navigate('AdminUsers')} />
+
           <Pressable
             onPress={() => void resetMockData()}
             style={styles.dangerRow}
@@ -90,6 +99,35 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </Text>
       <View style={styles.sectionBody}>{children}</View>
     </View>
+  );
+}
+
+function AdminRow({ enabled, onPress }: { enabled: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={enabled ? onPress : undefined}
+      disabled={!enabled}
+      style={styles.adminRow}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !enabled }}
+      testID="settings-admin-row"
+    >
+      <AppIcon
+        name="shield-account"
+        size={20}
+        color={enabled ? COLORS.textSecondary : COLORS.textMuted}
+      />
+      <View style={styles.adminBody}>
+        <Text variant="bodyLarge" style={!enabled && styles.adminDisabledText}>
+          Admin: all users
+        </Text>
+        <Text variant="bodySmall" style={styles.adminHint}>
+          {enabled
+            ? 'Read-only. Every account in the mock database.'
+            : 'Switch to mock mode to inspect seeded users.'}
+        </Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -140,6 +178,17 @@ const styles = StyleSheet.create({
   toggleDescription: { color: COLORS.textSecondary },
   developerBlock: { padding: SPACING.md, gap: SPACING.md },
   developerHint: { color: COLORS.textSecondary },
+  adminRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+    padding: SPACING.md,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  adminBody: { flex: 1, gap: 2 },
+  adminHint: { color: COLORS.textSecondary },
+  adminDisabledText: { color: COLORS.textMuted },
   dangerRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -10,8 +10,8 @@ export type AuthStackParamList = {
 export type OnboardingStackParamList = {
   Welcome: undefined;
   Basics: undefined;
+  Intent: undefined;
   Photos: undefined;
-  Preferences: undefined;
   Location: undefined;
   OnboardingDone: undefined;
 };
@@ -27,9 +27,13 @@ export type ProfileStackParamList = {
   ProfileHome: undefined;
   EditProfile: undefined;
   Preferences: undefined;
+  MatchProfile: undefined;
   Settings: undefined;
   Verification: undefined;
   ProfileDetail: { userId: string; user?: User };
+  /** Mock-mode dev tool. Not part of the real product navigation. */
+  AdminUsers: undefined;
+  AdminUserDetail: { userId: string };
 };
 
 export type ChatStackParamList = {

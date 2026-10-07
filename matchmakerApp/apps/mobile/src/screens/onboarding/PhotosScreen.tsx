@@ -36,7 +36,7 @@ export function PhotosScreen() {
     try {
       const updated = await updateProfile({ photos });
       setUser(updated);
-      navigation.navigate('Preferences');
+      navigation.navigate('Location');
     } catch (caught) {
       setError(AuthError.unknown(caught).message);
     } finally {

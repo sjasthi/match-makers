@@ -4,11 +4,11 @@ import { Text, TextInput } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
-  RelationshipGoal,
-  SexualOrientation,
+  Gender,
   bioSchema,
   nameSchema,
   dateOfBirthSchema,
+  genderSchema,
 } from '@match-makers/shared';
 import {
   ScreenContainer,
@@ -23,23 +23,11 @@ import { AuthError } from '@/services/auth/AuthError';
 import { COLORS, SPACING } from '@/constants';
 import type { OnboardingStackParamList } from '@/navigation/types';
 
-const ORIENTATION_OPTIONS: ReadonlyArray<ChipOption<SexualOrientation>> = [
-  { value: SexualOrientation.STRAIGHT, label: 'Straight' },
-  { value: SexualOrientation.GAY, label: 'Gay' },
-  { value: SexualOrientation.LESBIAN, label: 'Lesbian' },
-  { value: SexualOrientation.BISEXUAL, label: 'Bisexual' },
-  { value: SexualOrientation.PANSEXUAL, label: 'Pansexual' },
-  { value: SexualOrientation.ASEXUAL, label: 'Asexual' },
-  { value: SexualOrientation.QUEER, label: 'Queer' },
-  { value: SexualOrientation.PREFER_NOT_TO_SAY, label: 'Prefer not to say' },
-];
-
-const GOAL_OPTIONS: ReadonlyArray<ChipOption<RelationshipGoal>> = [
-  { value: RelationshipGoal.LONG_TERM, label: 'Long term' },
-  { value: RelationshipGoal.SHORT_TERM, label: 'Short term' },
-  { value: RelationshipGoal.CASUAL, label: 'Casual' },
-  { value: RelationshipGoal.FRIENDSHIP, label: 'Friendship' },
-  { value: RelationshipGoal.NOT_SURE, label: 'Not sure yet' },
+const GENDER_OPTIONS: ReadonlyArray<ChipOption<Gender>> = [
+  { value: Gender.FEMALE, label: 'Woman' },
+  { value: Gender.MALE, label: 'Man' },
+  { value: Gender.NON_BINARY, label: 'Non-binary' },
+  { value: Gender.PREFER_NOT_TO_SAY, label: 'Prefer not to say' },
 ];
 
 const FIELD_PROPS = {
@@ -47,6 +35,13 @@ const FIELD_PROPS = {
   style: { backgroundColor: COLORS.background },
 };
 
+/**
+ * FP3 "Basics": name, date of birth, gender and a short bio.
+ *
+ * Gender is new here. Register already captures it, but a registered account
+ * could still reach onboarding without it, and gender is read directly by the
+ * matching engine when deciding who to show.
+ */
 export function BasicsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<OnboardingStackParamList>>();
   const user = useAuthStore((store) => store.user);
@@ -55,20 +50,9 @@ export function BasicsScreen() {
   const [name, setName] = useState(user?.name ?? '');
   const [bio, setBio] = useState(user?.bio ?? '');
   const [dateOfBirth, setDateOfBirth] = useState(user?.dateOfBirth ?? '');
-  const [orientation, setOrientation] = useState<SexualOrientation | null>(
-    user?.sexualOrientation ?? null
-  );
-  const [goals, setGoals] = useState<RelationshipGoal[]>(
-    user && user.relationshipGoal !== RelationshipGoal.NOT_SURE ? [user.relationshipGoal] : []
-  );
+  const [gender, setGender] = useState<Gender | null>(user?.gender ?? null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  const toggleGoal = (value: RelationshipGoal) => {
-    setGoals((current) =>
-      current.includes(value) ? current.filter((goal) => goal !== value) : [...current, value]
-    );
-  };
 
   const onSave = async () => {
     setError(null);
@@ -91,18 +75,22 @@ export function BasicsScreen() {
       return;
     }
 
+    const parsedGender = genderSchema.safeParse(gender);
+    if (!parsedGender.success) {
+      setError('Pick a gender, or choose prefer not to say.');
+      return;
+    }
+
     setSaving(true);
     try {
       const updated = await updateProfile({
         name: parsedName.data,
         bio: parsedBio.data,
         dateOfBirth: parsedDob.data,
-        sexualOrientation: orientation ?? SexualOrientation.PREFER_NOT_TO_SAY,
-        // The stored model keeps a single goal, so the first selection wins.
-        relationshipGoal: goals[0] ?? user?.relationshipGoal ?? RelationshipGoal.NOT_SURE,
+        gender: parsedGender.data,
       });
       setUser(updated);
-      navigation.navigate('Photos');
+      navigation.navigate('Intent');
     } catch (caught) {
       setError(AuthError.unknown(caught).message);
     } finally {
@@ -143,6 +131,16 @@ export function BasicsScreen() {
           keyboardType="numbers-and-punctuation"
         />
 
+        <SelectChips
+          label="Gender"
+          options={GENDER_OPTIONS}
+          selected={gender ? [gender] : []}
+          onToggle={(value) => setGender(value)}
+          multiple={false}
+          error={!gender}
+          helperText="Used to decide who you are shown."
+        />
+
         <TextInput
           {...FIELD_PROPS}
           label="Bio"
@@ -157,22 +155,6 @@ export function BasicsScreen() {
         <Text variant="bodySmall" style={styles.counter}>
           {bio.length}/500
         </Text>
-
-        <SelectChips
-          label="Sexual orientation"
-          options={ORIENTATION_OPTIONS}
-          selected={orientation ? [orientation] : []}
-          onToggle={(value) => setOrientation(value)}
-          multiple={false}
-        />
-
-        <SelectChips
-          label="What are you looking for?"
-          options={GOAL_OPTIONS}
-          selected={goals}
-          onToggle={toggleGoal}
-          helperText="Pick the one that fits best. It feeds your match score."
-        />
 
         <PrimaryButton onPress={onSave} loading={saving} disabled={saving} fullWidth>
           Continue

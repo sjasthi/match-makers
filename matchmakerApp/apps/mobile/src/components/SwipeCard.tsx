@@ -13,7 +13,10 @@ import { ProfileImage } from './ProfileImage';
 import type { User } from '@match-makers/shared';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import { ageFromDateOfBirth } from '@/utils/mockData';
-import { compatibilityLabel, scoreCompatibility } from '@/utils/matching';
+import { compatibilityLabel, dealBreakerLabel, scoreCompatibility } from '@/utils/matching';
+import { distanceBetween } from '@/utils/eligibility';
+import { formatDistance } from '@/utils/distance';
+import { choiceLabel, promptQuestion } from '@/prompts';
 
 const SWIPE_THRESHOLD = 110;
 const ROTATION_RANGE = 12;
@@ -28,10 +31,22 @@ interface Props {
   enabled?: boolean;
 }
 
-function describe(user: User): string {
+/**
+ * The one line of context under the name: age, where they are, what they want.
+ *
+ * The distance is shown because it is now computed rather than guessed, and
+ * "12 km away" tells you something a city name does not: whether the date you
+ * are being offered is a drive or a flight. Omitted rather than approximated
+ * when either side has no coordinates, so the card never implies a precision
+ * the app does not have.
+ */
+function describe(user: User, viewer: User): string {
   const age = ageFromDateOfBirth(user.dateOfBirth);
   const goal = user.relationshipGoal.replace(/_/g, ' ');
-  return `${age} · ${user.location.city || user.location.country || 'Nearby'} · ${goal}`;
+  const place = user.location.city || user.location.country || 'Nearby';
+  const away = distanceBetween(viewer, user);
+
+  return [age, away === null ? place : `${place} · ${formatDistance(away)} away`, goal].join(' · ');
 }
 
 export const SwipeCard = memo(function SwipeCard({
@@ -45,6 +60,20 @@ export const SwipeCard = memo(function SwipeCard({
 }: Props) {
   const position = useRef(new Animated.ValueXY()).current;
   const compatibility = scoreCompatibility(viewer, user);
+
+  /**
+   * Shows a prompt the two of you actually agreed on, because that is the one
+   * thing here you can open a conversation with.
+   *
+   * Agreed on, specifically. Picking any prompt both people had answered meant
+   * the card could lead with a question you had given opposite answers to, and
+   * the strongest agreement first is the one most worth mentioning.
+   */
+  const icebreaker = (() => {
+    const strongest = compatibility.agreements[0];
+    if (!strongest) return undefined;
+    return user.questionnaire?.prompts?.find((answer) => answer.tag === strongest.tag);
+  })();
 
   const resetPosition = useCallback(() => {
     Animated.spring(position, {
@@ -149,7 +178,7 @@ export const SwipeCard = memo(function SwipeCard({
             </View>
 
             <Text style={styles.meta} numberOfLines={1}>
-              {describe(user)}
+              {describe(user, viewer)}
             </Text>
 
             {user.bio ? (
@@ -158,10 +187,35 @@ export const SwipeCard = memo(function SwipeCard({
               </Text>
             ) : null}
 
+            {icebreaker ? (
+              <View style={styles.promptBlock}>
+                <Text style={styles.promptQuestion} numberOfLines={2}>
+                  {promptQuestion(icebreaker.promptId, icebreaker.tag)}
+                </Text>
+                <Text style={styles.promptAnswer}>
+                  {choiceLabel(icebreaker.choice)}
+                  {icebreaker.note ? ` — ${icebreaker.note}` : ''}
+                </Text>
+              </View>
+            ) : null}
+
             <View style={styles.chipRow}>
               <Chip compact style={styles.compatibilityChip} textStyle={styles.compatibilityText}>
-                {compatibilityLabel(compatibility.score)} · {compatibility.score}%
+                {compatibility.dealBreakerClash
+                  ? dealBreakerLabel()
+                  : `${compatibilityLabel(compatibility.score)} · ${compatibility.score}%`}
               </Chip>
+              {compatibility.agreements.length > 0 ? (
+                <Chip compact style={styles.goalChip} textStyle={styles.compatibilityText}>
+                  {compatibility.agreements.length} prompt
+                  {compatibility.agreements.length === 1 ? '' : 's'} agreed on
+                </Chip>
+              ) : null}
+              {compatibility.conflicts.length > 0 ? (
+                <Chip compact style={styles.conflictChip} textStyle={styles.compatibilityText}>
+                  {compatibility.conflicts.length} differ
+                </Chip>
+              ) : null}
               {compatibility.sharedGoals ? (
                 <Chip compact style={styles.goalChip} textStyle={styles.compatibilityText}>
                   Same goal
@@ -243,6 +297,9 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     color: 'rgba(255,255,255,0.85)',
   },
+  promptBlock: { gap: 2, marginBottom: SPACING.sm },
+  promptQuestion: { color: COLORS.background, fontWeight: '600' },
+  promptAnswer: { color: COLORS.background, opacity: 0.9, fontStyle: 'italic' },
   bio: {
     fontSize: FONT_SIZES.sm,
     color: 'rgba(255,255,255,0.92)',
@@ -259,6 +316,9 @@ const styles = StyleSheet.create({
   },
   goalChip: {
     backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  conflictChip: {
+    backgroundColor: 'rgba(245,158,11,0.35)',
   },
   compatibilityText: {
     color: COLORS.background,

@@ -71,3 +71,60 @@ How this connects to the match percentage
 - The questionnaire is the data we will need later, the real scoring stays in the Matching and Feed engine
   from FP2 so weights can be tuned without shipping an app update
 - This assignment is only about collecting the answers, the percentage math is future work
+
+[FP4] 10/6/2026
+### This assignment focuses on making the match interactive instead of static.
+So far a user swipes a card and the percentage is derived only from what two people
+already told us about themselves in the questionnaire. Nothing in that score says
+anything about how two people actually behave, and nothing on the card gives the
+user a reason to care about the person on it. For this iteration we want to add a
+photo feed people can post into, tag, and react to, so that liking the same content
+becomes an actual signal the matcher can read.
+
+The idea: a user uploads an image (a pet photo, say), tags it `pet/cat`, and that
+post is attached to their profile. Other users react to the post. If two users react
+to the same post, that shared taste is a mutual signal, so we bump the compatibility
+percentage and eventually let them match. When that happens we tell them why, in
+words, instead of showing a bare number.
+
+Shared feed outline (first pass):
+- Post: one image, uploaded by a profile, with at most one primary tag drawn from a
+  closed set (the same reason as the questionnaire tags, the matcher has to compare
+  two people and free text gives it nothing to compare)
+- Tag: a closed set for now, `pet/cat`, `pet/dog`, `outdoors/hiking`, `food/baking`,
+  etc. Multi-tag posts are allowed but the first tag is the primary one used for matching
+- Reaction: a like and a comment, because FP1 already said effort is what separates
+  real users from bots, a one-tap like is the spam surface and a comment is not
+- Attached to profile: every post belongs to a profile and shows on that profile, so
+  a photo a person posted is also a way of describing them
+- Feed: vertical full-screen post feed, separate from the swipe deck, so browsing
+  content does not consume a like
+
+Mutual reaction as a match signal
+- Two people reacting to the same post is a shared-interest hit we can score the same
+  way we score shared questionnaire answers, and it is harder to fake because it costs
+  the user an action
+- Unlike a tag on a profile, a reaction is directional and mutual, so it reads as
+  interest rather than as a stated preference, which is the same honesty problem FP1
+  flagged
+- We would like the percentage to move when two people react to the same post, and to
+  eventually carry that pair into a match, so the score has a cause the user can see
+
+The reason, in words
+- This is the Hinge idea from our FP1 market research, the person has to interact with
+  something before they can proceed
+- A match should come with a sentence the user can check, "you both like posts tagged
+  pet/cat", and the profile screen already breaks the score into named signals so
+  there is a place to put it
+- A reason is also the thing that makes a low percentage acceptable, if the number is
+  62 and the sentence underneath says why, the user has something to do with it
+
+How this connects to the match percentage
+- scoreCompatibility in matchmakerApp/apps/mobile/src/utils/matching.ts stays the
+  source of the percentage and keeps its FP3 weights, the reaction signal gets added
+  alongside them rather than replacing them
+- The real scoring still belongs in the Matching and Feed engine from FP2, the posts
+  and reactions are the new data it reads
+- Open question we still have to answer: how much a shared reaction is worth relative
+  to a shared questionnaire answer, and whether reacting to a lot of posts should
+  stop counting, otherwise one very active user looks compatible with everyone

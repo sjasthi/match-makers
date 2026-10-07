@@ -1,36 +1,69 @@
-import type { User } from '@match-makers/shared';
 import { getApiClient } from '@/services/api/client';
 import { getAuthAdapter } from '@/services/auth';
 import { mockDb, toPublicUser } from '@/services/mock/database';
 import { simulateLatency, maybeSimulateFailure } from '@/services/mock/network';
 import { scoreCompatibility } from '@/utils/matching';
-import { ageFromDateOfBirth } from '@/utils/mockData';
+import { checkEligibility, summariseBlockers, type BlockerCode } from '@/utils/eligibility';
 import type { FeedPage, SwipeOutcome, SwipeType } from '@/types';
 
 const DEFAULT_PAGE_SIZE = 10;
 
+/**
+ * Builds the deck: everyone whose requirements the two of you both satisfy,
+ * best compatibility first.
+ *
+ * Eligibility and scoring are deliberately separate. `checkEligibility` decides
+ * who is allowed to appear at all, in both directions, and knows nothing about the score;
+ * `scoreCompatibility` ranks the people who survived and knows nothing about
+ * distance. Collapsing them would mean either a good score could pull someone
+ * back into a deck their stated requirements exclude them from, or a distance
+ * limit could flatten the ordering of everyone inside it, and both of those were
+ * explicitly not what the weights are for.
+ *
+ * Scoring runs before filtering rather than after, so the breakdown that sorts
+ * the deck is the same object the cards render. Computing it for people who get
+ * filtered out costs a little work on a twenty row seed and saves a second pass
+ * that would have to recompute it anyway.
+ */
 async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> {
   const adapter = getAuthAdapter();
   const viewer = await adapter.getCurrentUser();
-  if (!viewer) return { items: [], page, pageSize, total: 0, hasMore: false };
+  if (!viewer) return { items: [], page, pageSize, total: 0, hasMore: false, blockedReason: null };
 
   const [allUsers, swipedIds] = await Promise.all([
     mockDb.allUsers(),
     mockDb.swipedUserIds(viewer.id),
   ]);
 
-  const eligible = allUsers
-    .filter((user) => user.id !== viewer.id && !swipedIds.has(user.id))
-    .map((user) => ({ user, breakdown: scoreCompatibility(viewer, toPublicUser(user)) }))
-    .filter(({ user }) => {
-      const age = ageFromDateOfBirth(user.dateOfBirth);
-      return (
-        age >= viewer.preferences.ageRange.min &&
-        age <= viewer.preferences.ageRange.max &&
-        viewer.preferences.genders.includes(user.gender)
-      );
-    })
-    .sort((a, b) => b.breakdown.score - a.breakdown.score);
+  const scored = allUsers
+    .filter((user) => user.id !== viewer.id)
+    .map((user) => ({ user, breakdown: scoreCompatibility(viewer, toPublicUser(user)) }));
+
+  const blocked: BlockerCode[] = [];
+  const eligible = scored.filter(({ user }) => {
+    if (swipedIds.has(user.id)) {
+      blocked.push('already_swiped');
+      return false;
+    }
+
+    // Both directions, tracked separately. Your own requirements and the fact
+    // that someone filtered you out are different problems with different fixes,
+    // and the empty state has to name the right one.
+    const yours = checkEligibility(viewer, user);
+    if (!yours.eligible) {
+      blocked.push(...yours.failures);
+      return false;
+    }
+
+    if (!checkEligibility(user, viewer).eligible) {
+      blocked.push('their_requirements');
+      return false;
+    }
+
+    return true;
+  });
+
+  eligible.sort((a, b) => b.breakdown.score - a.breakdown.score);
 
   const start = (page - 1) * pageSize;
   const items = eligible.slice(start, start + pageSize).map(({ user }) => toPublicUser(user));
@@ -41,6 +74,9 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     pageSize,
     total: eligible.length,
     hasMore: start + pageSize < eligible.length,
+    // Only on an empty deck. On page 2 of a healthy one, "most people here are
+    // blocked by your age range" would be true and useless.
+    blockedReason: eligible.length === 0 ? summariseBlockers(blocked) : null,
   };
 }
 
@@ -51,14 +87,12 @@ export async function fetchFeed(page = 1, pageSize = DEFAULT_PAGE_SIZE): Promise
     return buildMockFeed(page, pageSize);
   }
 
-  const response = await getApiClient().get<{
-    items: User[];
-    page: number;
-    pageSize: number;
-    total: number;
-    hasMore: boolean;
-  }>('/feed', { params: { page, pageSize } });
-  return response.data;
+  // The server holds the caller's preferences and applies the same mutual
+  // rules, so the client sends paging only. It owns `blockedReason` as well:
+  // naming the reason a deck is empty is a query against every candidate, and
+  // the server can answer it better than the client can from one page.
+  const response = await getApiClient().get<FeedPage>('/feed', { params: { page, pageSize } });
+  return { ...response.data, blockedReason: response.data.blockedReason ?? null };
 }
 
 /**

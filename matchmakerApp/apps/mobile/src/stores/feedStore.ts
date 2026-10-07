@@ -13,6 +13,15 @@ interface FeedStore {
   hasMore: boolean;
   state: LoadState;
   error: string | null;
+  /**
+   * Why an empty deck came back empty, in a sentence, or null when it did not.
+   *
+   * Held here rather than recomputed on the screen because it arrives with the
+   * page: answering it needs every candidate, not the ten in front of you.
+   * Cleared on a successful load, so widening a filter visibly clears the
+   * complaint that made you widen it.
+   */
+  blockedReason: string | null;
   /** Most recent match, surfaced as an overlay on the feed. */
   lastMatch: SwipeOutcome | null;
   isSwiping: boolean;
@@ -31,6 +40,7 @@ const INITIAL = {
   hasMore: true,
   state: 'idle' as LoadState,
   error: null as string | null,
+  blockedReason: null as string | null,
   lastMatch: null as SwipeOutcome | null,
   isSwiping: false,
   activeIndex: 0,
@@ -48,6 +58,7 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         page: 1,
         hasMore: result.hasMore,
         activeIndex: 0,
+        blockedReason: result.blockedReason,
         state: 'success',
       });
     } catch (error) {

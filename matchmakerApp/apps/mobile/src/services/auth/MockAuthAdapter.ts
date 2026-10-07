@@ -79,10 +79,17 @@ export class MockAuthAdapter implements AuthAdapter {
       location: { latitude: 0, longitude: 0, city: '', country: '' },
       preferences: {
         ageRange: { min: 24, max: 38 },
+        // Nearby, not global: a new account has no location yet, and defaulting
+        // to global would quietly widen every distance rule the moment somebody
+        // registered. `isProfileComplete` keeps the account in onboarding until a
+        // real location exists, so this only affects the one screen in between.
+        distanceMode: 'nearby',
         maxDistance: 50,
         genders: [],
         relationshipGoals: [],
       },
+      // Deliberately no questionnaire: isProfileComplete requires one, so this
+      // is what holds a new account in onboarding until every step is answered.
       isVerified: false,
       createdAt: now,
       updatedAt: now,

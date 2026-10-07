@@ -4,7 +4,13 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { Text, Divider } from 'react-native-paper';
-import { ScreenContainer, AppIcon, ProfileImage } from '@/components';
+import {
+  ScreenContainer,
+  AppIcon,
+  ProfileImage,
+  describeDistance,
+  type IconName,
+} from '@/components';
 import { useAuthActions, useCurrentUser } from '@/hooks';
 import { fetchVerificationStatus, getMissingProfileSections } from '@/services/profile';
 import { ageFromDateOfBirth } from '@/utils/mockData';
@@ -135,7 +141,7 @@ export function ProfileScreen() {
               <Text variant="labelSmall" style={styles.preferenceLabel}>
                 Distance
               </Text>
-              <Text variant="titleMedium">{user.preferences.maxDistance} km</Text>
+              <Text variant="titleMedium">{describeDistance(user.preferences)}</Text>
             </View>
             <View style={styles.preferenceCard}>
               <Text variant="labelSmall" style={styles.preferenceLabel}>
@@ -158,6 +164,11 @@ export function ProfileScreen() {
             icon="tune-variant"
             label="Discovery preferences"
             onPress={() => navigation?.navigate('Profile', { screen: 'Preferences' })}
+          />
+          <MenuRow
+            icon="clipboard-text-outline"
+            label="Match profile"
+            onPress={() => navigation?.navigate('Profile', { screen: 'MatchProfile' })}
           />
           <MenuRow
             icon="shield-check-outline"
@@ -206,7 +217,7 @@ function MenuRow({
   value,
   onPress,
 }: {
-  icon: 'pencil-outline' | 'tune-variant' | 'shield-check-outline' | 'cog-outline';
+  icon: IconName;
   label: string;
   value?: string;
   onPress: () => void;

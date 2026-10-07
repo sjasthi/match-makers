@@ -9,12 +9,14 @@ export interface FeedPage {
   pageSize: number;
   total: number;
   hasMore: boolean;
-}
-
-export interface FeedFilters {
-  ageRange: { min: number; max: number };
-  maxDistance: number;
-  genders: string[];
+  /**
+   * Why the deck came back empty, in a sentence, when it did and only then.
+   *
+   * An empty feed is indistinguishable from an empty match pool unless the app
+   * says which of the two it is, and a filter that can empty your deck without
+   * explanation is a filter people learn to distrust.
+   */
+  blockedReason: string | null;
 }
 
 export type SwipeType = SwipeAction['type'];

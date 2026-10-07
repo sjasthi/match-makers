@@ -1,5 +1,30 @@
-import type { User, UserPreferences, Photo, Location } from '@match-makers/shared';
-import { Gender, RelationshipGoal, SexualOrientation } from '@match-makers/shared';
+import type {
+  User,
+  UserPreferences,
+  UserQuestionnaire,
+  ValueImportance,
+  Photo,
+  Location,
+} from '@match-makers/shared';
+import {
+  Gender,
+  RelationshipGoal,
+  SexualOrientation,
+  PartnerValue,
+  ScheduleType,
+  ExerciseLevel,
+  SmokingStatus,
+  DrinkingStatus,
+  PetsPreference,
+  PromptTag,
+  PromptChoice,
+  type PromptAnswer,
+} from '@match-makers/shared';
+import { MAX_IMPORTANCE, MIN_PROMPTS } from '@match-makers/shared';
+import { PROMPTS, type TaggedPrompt } from '@/prompts';
+import { APP_CONFIG } from '@/constants';
+import { findCityCentroid } from '@/utils/cityCatalog';
+import { destinationPoint } from '@/utils/distance';
 
 export const DEMO_EMAIL = 'demo@matchmakers.dev';
 export const DEMO_PASSWORD = 'Password1';
@@ -58,16 +83,98 @@ const LAST_NAMES = [
   'Rossi',
 ];
 
-const CITIES: ReadonlyArray<Pick<Location, 'city' | 'country'>> = [
-  { city: 'Austin', country: 'United States' },
-  { city: 'Toronto', country: 'Canada' },
-  { city: 'Lisbon', country: 'Portugal' },
-  { city: 'Melbourne', country: 'Australia' },
-  { city: 'Nairobi', country: 'Kenya' },
-  { city: 'Rotterdam', country: 'Netherlands' },
-  { city: 'Singapore', country: 'Singapore' },
-  { city: 'Bogota', country: 'Colombia' },
-];
+/**
+ * Where the seeded candidates live, as tiers rather than as one flat list.
+ *
+ * This replaced a single `CITIES` array paired with a uniformly random
+ * latitude and longitude, which was the reason a distance filter could not be
+ * switched on: the coordinates were drawn from the whole globe and attached to
+ * whichever city label the same PRNG happened to produce, so a profile called
+ * "Austin" could sit at latitude -70. Any correct distance calculation against
+ * that seed returns an empty deck, which is indistinguishable from a broken
+ * filter.
+ *
+ * Three tiers, so the nearby/global split is something you can see rather than
+ * something the code merely claims to support. The demo account is in Austin on
+ * a 50 km radius, so it should land on a deck full of nearby people by default
+ * and a visibly larger one after switching to global.
+ */
+interface SeedTier {
+  /** City names to draw from. Every one is present in `CITY_CENTROIDS`. */
+  cities: readonly string[];
+  /** Radius to scatter within, in km. Equal values means "sit on the centroid". */
+  minKm: number;
+  maxKm: number;
+}
+
+/** Inside the demo account's 50 km radius, so these are the deck you get. */
+const NEAR_HOME: SeedTier = { cities: ['Austin'], minKm: 2, maxKm: 45 };
+
+/** Close enough to be plausible, far enough to be filtered out by 50 km. */
+const SAME_REGION: SeedTier = {
+  cities: ['San Antonio', 'Houston', 'Dallas'],
+  minKm: 90,
+  maxKm: 320,
+};
+
+/** Only reachable by switching to global. */
+const WORLDWIDE: SeedTier = {
+  cities: [
+    'Toronto',
+    'Lisbon',
+    'Melbourne',
+    'Nairobi',
+    'Rotterdam',
+    'Singapore',
+    'Bogota',
+    'Amsterdam',
+  ],
+  minKm: 0,
+  maxKm: 0,
+};
+
+/**
+ * Which tier a candidate belongs to.
+ *
+ * Weighted towards nearby, because that is roughly what a real dating pool
+ * looks like and because the demo deck has to be worth swiping through. Drawn
+ * from the same stream as everything else on the profile, so reseeding
+ * redistributes locations along with names and prompt answers.
+ */
+function seedTier(random: () => number): SeedTier {
+  const draw = random();
+  if (draw < 0.6) return NEAR_HOME;
+  if (draw < 0.8) return SAME_REGION;
+  return WORLDWIDE;
+}
+
+/**
+ * A location for a seeded candidate: its city centroid, scattered by a known
+ * distance.
+ *
+ * Scattering goes through `destinationPoint` rather than adding degrees to the
+ * latitude, so "30 km from Austin" is genuinely 30 km from Austin. Off the
+ * centre is a real thing people do, and a profile whose stored coordinates
+ * disagree with its city label is the exact bug this replaced.
+ *
+ * The city label is carried through the scatter rather than re-derived, because
+ * nobody 30 km from downtown Austin lives in a different city.
+ */
+function seedLocation(random: () => number, tier: SeedTier): Location {
+  const city = pick(random, tier.cities);
+  const centroid = findCityCentroid(city);
+  if (!centroid) {
+    // Every tier city is in the catalog. Throwing here rather than falling back
+    // to 0,0 is deliberate: a silently mislabelled coordinate is what made the
+    // distance rules untestable in the first place.
+    throw new Error(`Seed city "${city}" is missing from CITY_CENTROIDS`);
+  }
+
+  if (tier.minKm === tier.maxKm) return centroid;
+
+  const spread = tier.minKm + random() * (tier.maxKm - tier.minKm);
+  return destinationPoint(centroid, random() * 360, spread);
+}
 
 const INTERESTS = [
   'bouldering',
@@ -160,12 +267,203 @@ function buildBio(random: () => number): string {
   return template.replace('{a}', firstInterest).replace('{b}', secondInterest);
 }
 
-function defaultPreferences(random: () => number): UserPreferences {
+/**
+ * Preferences for a seeded candidate, deliberately permissive.
+ *
+ * Matching is mutual: the deck is what both people' requirements allow, not just
+ * the viewer's. If seeded candidates were handed the same 25-75 km radius and
+ * narrow age range the demo account has, their limits would bind first and the
+ * demo would appear to prove nothing about the viewer's own settings.
+ *
+ * So candidates are set to accept anyone, and `distanceMode` is global rather
+ * than nearby: the viewer becomes the only constrained side, which is what
+ * makes toggling Nearby/Global on their own profile visibly change the deck.
+ * The mutual rejection path is exercised by the eligibility tests instead, the
+ * same way the demo questionnaire carries no deal breaker for exactly this
+ * reason (`demoQuestionnaire`).
+ */
+function defaultPreferences(): UserPreferences {
   return {
-    ageRange: { min: 24, max: 38 },
-    maxDistance: 25 + Math.round(random() * 50),
+    ageRange: { min: APP_CONFIG.MIN_AGE, max: APP_CONFIG.MAX_AGE },
+    distanceMode: 'global',
+    maxDistance: APP_CONFIG.MAX_DISTANCE,
     genders: [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY],
-    relationshipGoals: [RelationshipGoal.LONG_TERM, RelationshipGoal.SHORT_TERM],
+    relationshipGoals: [
+      RelationshipGoal.LONG_TERM,
+      RelationshipGoal.SHORT_TERM,
+      RelationshipGoal.CASUAL,
+      RelationshipGoal.FRIENDSHIP,
+    ],
+  };
+}
+
+/** Picks `count` distinct entries, deterministic for a given PRNG state. */
+function pickMany<T>(random: () => number, list: readonly T[], count: number): T[] {
+  const remaining = [...list];
+  const chosen: T[] = [];
+  const take = Math.min(count, remaining.length);
+  for (let index = 0; index < take; index += 1) {
+    const [picked] = remaining.splice(Math.floor(random() * remaining.length), 1);
+    if (picked !== undefined) chosen.push(picked);
+  }
+  return chosen;
+}
+
+const ALL_VALUES = Object.values(PartnerValue);
+const ALL_PROMPT_TAGS = Object.values(PromptTag);
+const ALL_PROMPT_CHOICES = Object.values(PromptChoice);
+const ALL_SCHEDULES = Object.values(ScheduleType);
+const ALL_EXERCISE = Object.values(ExerciseLevel);
+const ALL_SMOKING = Object.values(SmokingStatus);
+const ALL_DRINKING = Object.values(DrinkingStatus);
+const ALL_PETS = Object.values(PetsPreference);
+
+/** Draws 2-4 values, including the well-liked ones at their weighted rate. */
+function weightedValues(random: () => number): PartnerValue[] {
+  const chosen: PartnerValue[] = [];
+  for (const value of ALL_VALUES) {
+    if (random() < (VALUE_WEIGHTS[value] ?? 0.2)) chosen.push(value);
+  }
+
+  const target = 2 + Math.floor(random() * 3);
+  if (chosen.length < target) {
+    chosen.push(
+      ...pickMany(
+        random,
+        ALL_VALUES.filter((v) => !chosen.includes(v)),
+        target - chosen.length
+      )
+    );
+  }
+  return chosen.slice(0, target);
+}
+
+/**
+ * Answers a random subset of the prompts.
+ *
+ * Every candidate answers at least MIN_PROMPTS so the overlap signal is real,
+ * and drawn from the same stream as the rest of the profile so a reseed
+ * reshuffles prompt answers along with everything else.
+ */
+function buildPromptAnswers(random: () => number): PromptAnswer[] {
+  const tags = pickMany(random, ALL_PROMPT_TAGS, MIN_PROMPTS + Math.floor(random() * 4));
+  return (
+    tags
+      // The id has to be a real prompt id, otherwise every surface that renders
+      // an answer has to fall back to showing a bare tag.
+      .map((tag) => PROMPTS.find((prompt) => prompt.tag === tag))
+      .filter((definition): definition is TaggedPrompt => definition !== undefined)
+      .map((definition) => ({
+        promptId: definition.id,
+        tag: definition.tag,
+        choice: pick(random, ALL_PROMPT_CHOICES),
+      }))
+  );
+}
+
+/**
+ * Builds the questionnaire answers the FP3 onboarding collects.
+ *
+ * Candidates need these so the matching engine has something to compare when
+ * it is built; without them every seeded profile is identical on the fields
+ * that will eventually drive the score. Grades are assigned from the same
+ * random stream as the rest of the user, so a reseed reshuffles the data
+ * exactly like it reshuffles the rest of the profile.
+ */
+/**
+ * Shares of seeded candidates that pick each value.
+ *
+ * Uniform sampling from the eight values made almost nobody agree on
+ * anything, which is not what the value of a trait looks like in practice:
+ * kindness is the most commonly wanted trait by a wide margin, and the more
+ * idiosyncratic ones are rare. Weighting it this way keeps the demo deck
+ * legible (a real spread, not everyone scoring the same) and stops a single
+ * non-negotiable value from vetoing most of the deck.
+ */
+const VALUE_WEIGHTS: Record<PartnerValue, number> = {
+  [PartnerValue.KINDNESS]: 0.7,
+  [PartnerValue.EMOTIONAL_OPENNESS]: 0.5,
+  [PartnerValue.SENSE_OF_HUMOUR]: 0.45,
+  [PartnerValue.SHARED_INTERESTS]: 0.35,
+  [PartnerValue.FAMILY]: 0.25,
+  [PartnerValue.AMBITION]: 0.25,
+  [PartnerValue.INDEPENDENCE]: 0.2,
+  [PartnerValue.PHYSICAL_CLOSENESS]: 0.2,
+};
+
+function buildQuestionnaire(random: () => number): UserQuestionnaire {
+  const values = weightedValues(random);
+  const importance: ValueImportance = {};
+  for (const value of values) {
+    importance[value] = (1 +
+      Math.floor(random() * MAX_IMPORTANCE)) as ValueImportance[PartnerValue];
+  }
+
+  // Deal breakers are rare, and when one exists it is the highest graded
+  // value, otherwise the pair would contradict the rest of the answer.
+  const dealBreakers =
+    random() > 0.8
+      ? values.filter((value) => importance[value] === MAX_IMPORTANCE).slice(0, 1)
+      : [];
+
+  return {
+    values,
+    importance,
+    dealBreakers,
+    prompts: buildPromptAnswers(random),
+    lifestyle: {
+      schedule: pick(random, ALL_SCHEDULES),
+      exercise: pick(random, ALL_EXERCISE),
+      smoking: pick(random, ALL_SMOKING),
+      drinking: pick(random, ALL_DRINKING),
+      pets: pick(random, ALL_PETS),
+    },
+  };
+}
+
+/**
+ * The demo account's questionnaire, fixed rather than random.
+ *
+ * It has to be complete because `isProfileComplete` now requires a
+ * questionnaire, and RootNavigator only offers the feed once the profile is
+ * complete. If this were left blank the demo shortcut would dead-end in
+ * onboarding, which is the opposite of what a demo account is for.
+ */
+function demoQuestionnaire(): UserQuestionnaire {
+  const values: PartnerValue[] = [
+    PartnerValue.KINDNESS,
+    PartnerValue.SENSE_OF_HUMOUR,
+    PartnerValue.EMOTIONAL_OPENNESS,
+    PartnerValue.SHARED_INTERESTS,
+  ];
+  return {
+    values,
+    importance: {
+      [PartnerValue.KINDNESS]: 5,
+      [PartnerValue.SENSE_OF_HUMOUR]: 4,
+      [PartnerValue.EMOTIONAL_OPENNESS]: 5,
+      [PartnerValue.SHARED_INTERESTS]: 3,
+    },
+    // Deliberately no deal breaker. The veto pins a score to 24, and since
+    // roughly a third of seeded candidates lack any given value, one on the
+    // demo account turns most of the visible deck into the same 24%. The demo
+    // exists to show a working spread; the veto is exercised by the tests and
+    // by anyone who declares one during onboarding.
+    dealBreakers: [],
+    prompts: [
+      { promptId: 'family', tag: PromptTag.FAMILY, choice: PromptChoice.SOMETIMES },
+      { promptId: 'outdoors', tag: PromptTag.LEISURE, choice: PromptChoice.YES },
+      { promptId: 'kitchen', tag: PromptTag.FOOD, choice: PromptChoice.YES },
+      { promptId: 'playlist', tag: PromptTag.MUSIC, choice: PromptChoice.YES },
+      { promptId: 'slow', tag: PromptTag.RECOVERY, choice: PromptChoice.NO },
+    ],
+    lifestyle: {
+      schedule: ScheduleType.FLEXIBLE,
+      exercise: ExerciseLevel.MODERATE,
+      smoking: SmokingStatus.NEVER,
+      drinking: DrinkingStatus.SOCIALLY,
+      pets: PetsPreference.LOVE_PETS,
+    },
   };
 }
 
@@ -184,7 +482,6 @@ export function generateMockUser(index: number, seed = 42): User & { password: s
   const random = createRandom(seed + index * 7919);
   const firstName = pick(random, FIRST_NAMES);
   const lastName = pick(random, LAST_NAMES);
-  const place = pick(random, CITIES);
   const gender = pick(random, [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY]);
 
   const birthYear = 1990 + Math.floor(random() * 14);
@@ -216,13 +513,9 @@ export function generateMockUser(index: number, seed = 42): User & { password: s
     ]),
     bio: random() > 0.4 ? buildBio(random) : pick(random, BIOS),
     photos: buildPhotos(String(index)),
-    location: {
-      latitude: Number((random() * 180 - 90).toFixed(6)),
-      longitude: Number((random() * 360 - 180).toFixed(6)),
-      city: place.city,
-      country: place.country,
-    },
-    preferences: defaultPreferences(random),
+    location: seedLocation(random, seedTier(random)),
+    preferences: defaultPreferences(),
+    questionnaire: buildQuestionnaire(random),
     isVerified: random() > 0.35,
     createdAt,
     updatedAt: createdAt,
@@ -233,7 +526,14 @@ export function generateMockUsers(count: number, seed = 42): Array<User & { pass
   return Array.from({ length: count }, (_, index) => generateMockUser(index + 1, seed));
 }
 
-/** The account you can sign into immediately to explore the prototype. */
+/**
+ * The account you can sign into immediately to explore the prototype.
+ *
+ * `nearby` at 50 km from Austin is the default because it is the interesting
+ * case: it is a real limit that the seed is built to partly satisfy, so
+ * switching to `global` in preferences changes the size of the deck for a
+ * reason the tester can see.
+ */
 export function generateDemoUser(): User & { password: string } {
   return {
     id: 'user_demo',
@@ -249,6 +549,7 @@ export function generateDemoUser(): User & { password: string } {
     location: { latitude: 30.2672, longitude: -97.7431, city: 'Austin', country: 'United States' },
     preferences: {
       ageRange: { min: 24, max: 38 },
+      distanceMode: 'nearby',
       maxDistance: 50,
       genders: [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY],
       relationshipGoals: [
@@ -257,6 +558,7 @@ export function generateDemoUser(): User & { password: string } {
         RelationshipGoal.CASUAL,
       ],
     },
+    questionnaire: demoQuestionnaire(),
     isVerified: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

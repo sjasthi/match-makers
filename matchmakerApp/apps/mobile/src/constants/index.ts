@@ -30,8 +30,12 @@ export const APP_CONFIG = {
   MAX_AGE: 100,
   MAX_DISTANCE: 500,
   SWIPE_LIMIT_DAILY: 100,
-  /** Profile is considered incomplete until these are satisfied. */
-  ONBOARDING_STEPS: ['photos', 'preferences', 'location'] as const,
+  /**
+   * Profile is considered incomplete until these are satisfied, in the order
+   * the onboarding questionnaire asks them. Feeds
+   * `getMissingProfileSections`, so keep it in step with that list.
+   */
+  ONBOARDING_STEPS: ['bio', 'photos', 'location', 'preferences'] as const,
 } as const;
 
 export const COLORS = {

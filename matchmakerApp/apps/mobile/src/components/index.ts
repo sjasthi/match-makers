@@ -14,3 +14,6 @@ export { PrimaryButton } from './PrimaryButton';
 export { ErrorBanner } from './ErrorBanner';
 export { SelectChips } from './SelectChips';
 export type { ChipOption } from './SelectChips';
+export { Stepper } from './Stepper';
+export { DiscoveryPreferences, defaultPreferences, describeDistance } from './DiscoveryPreferences';
+export { ImportanceScaleControl } from './ImportanceScale';

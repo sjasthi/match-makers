@@ -53,9 +53,9 @@ describe('Profile menu navigation', () => {
 
     fireEvent.press(screen.getByLabelText('Discovery preferences'));
 
-    // PreferencesScreen is reused from onboarding; the profile stack supplies
-    // onComplete so the button saves and returns instead of advancing.
-    await waitFor(() => expect(screen.getByText('Continue')).toBeTruthy());
+    // Preferences left the onboarding flow when FP3 moved the age range onto
+    // the location step, so it now saves and goes back rather than advancing.
+    await waitFor(() => expect(screen.getByText('Save')).toBeTruthy());
   });
 
   it('opens Verification from the Profile tab', async () => {
@@ -74,5 +74,32 @@ describe('Profile menu navigation', () => {
     fireEvent.press(screen.getByLabelText('Settings'));
 
     await waitFor(() => expect(screen.getByText('Reset mock data')).toBeTruthy());
+  });
+
+  it('opens Match profile from the Profile tab', async () => {
+    await renderSignedIn();
+    await openProfileTab();
+
+    fireEvent.press(screen.getByLabelText('Match profile'));
+
+    // The demo account ships a complete questionnaire, so this renders the
+    // stored answers rather than the empty state.
+    await waitFor(() => expect(screen.getByText('Your match profile')).toBeTruthy());
+    expect(screen.getByText('Values')).toBeTruthy();
+    expect(screen.getByText('Lifestyle')).toBeTruthy();
+  });
+
+  it('opens the account inspector from Settings', async () => {
+    await renderSignedIn();
+    await openProfileTab();
+
+    fireEvent.press(screen.getByLabelText('Settings'));
+    await waitFor(() => expect(screen.getByText('Reset mock data')).toBeTruthy());
+
+    // The row only enables in mock mode, and mock is the default here.
+    fireEvent.press(screen.getByTestId('settings-admin-row'));
+
+    // 21 accounts: the demo account plus 20 seeded candidates.
+    await waitFor(() => expect(screen.getByText('21 ACCOUNTS')).toBeTruthy(), { timeout: 15_000 });
   });
 });
