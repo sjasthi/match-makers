@@ -2,17 +2,30 @@ import { getApiClient } from '@/services/api/client';
 import { getAuthAdapter } from '@/services/auth';
 import { mockDb, toPublicUser } from '@/services/mock/database';
 import { simulateLatency, maybeSimulateFailure } from '@/services/mock/network';
-import { scoreCompatibility } from '@/utils/matching';
-import { checkEligibility, summariseBlockers, type BlockerCode } from '@/utils/eligibility';
+import { scoreCompatibility, type TasteSignal } from '@/utils/matching';
+import { buildTasteIndex, tasteBetween, type TasteIndex } from '@/utils/taste';
+import { mutualGate, summariseBlockers, type BlockerCode } from '@/utils/eligibility';
 import type { FeedPage, SwipeOutcome, SwipeType } from '@/types';
 
 const DEFAULT_PAGE_SIZE = 10;
 
 /**
+ * The photo feed's contribution to the deck, built once per load.
+ *
+ * Loaded alongside the users rather than lazily per candidate: every candidate
+ * needs the same table, and rebuilding an index twenty times over is the kind of
+ * thing that is free on a twenty row seed and quadratic on a real one.
+ */
+async function loadTasteIndex(): Promise<TasteIndex> {
+  const [posts, reactions] = await Promise.all([mockDb.allPosts(), mockDb.allPostReactions()]);
+  return buildTasteIndex(reactions, posts);
+}
+
+/**
  * Builds the deck: everyone whose requirements the two of you both satisfy,
  * best compatibility first.
  *
- * Eligibility and scoring are deliberately separate. `checkEligibility` decides
+ * Eligibility and scoring are deliberately separate. `mutualGate` decides
  * who is allowed to appear at all, in both directions, and knows nothing about the score;
  * `scoreCompatibility` ranks the people who survived and knows nothing about
  * distance. Collapsing them would mean either a good score could pull someone
@@ -28,16 +41,35 @@ const DEFAULT_PAGE_SIZE = 10;
 async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> {
   const adapter = getAuthAdapter();
   const viewer = await adapter.getCurrentUser();
-  if (!viewer) return { items: [], page, pageSize, total: 0, hasMore: false, blockedReason: null };
+  if (!viewer) {
+    return { items: [], page, pageSize, total: 0, hasMore: false, blockedReason: null, needsTaste: false };
+  }
 
-  const [allUsers, swipedIds] = await Promise.all([
+  const [allUsers, swipedIds, taste] = await Promise.all([
     mockDb.allUsers(),
     mockDb.swipedUserIds(viewer.id),
+    loadTasteIndex(),
   ]);
+
+  // The deck refuses to rank on nothing. With zero likes the only points left are
+  // the twenty of stated fact — goal, orientation, verified — and a deck ordered
+  // by those handed a brand new account an "11% match" card that meant nothing
+  // at all. An empty deck that says why is honest; a weak number dressed up as
+  // a match is not.
+  //
+  // A like, specifically, not an answer: dislikes never become shared evidence,
+  // they only steer the feed, so a history of nothing but passes leaves the
+  // matcher with exactly as much to rank on as no history at all.
+  if ((taste.likeCountByUser.get(viewer.id) ?? 0) === 0) {
+    return { items: [], page, pageSize, total: 0, hasMore: false, blockedReason: null, needsTaste: true };
+  }
 
   const scored = allUsers
     .filter((user) => user.id !== viewer.id)
-    .map((user) => ({ user, breakdown: scoreCompatibility(viewer, toPublicUser(user)) }));
+    .map((user) => ({
+      user,
+      breakdown: scoreCompatibility(viewer, toPublicUser(user), tasteSignal(taste, viewer.id, user.id)),
+    }));
 
   const blocked: BlockerCode[] = [];
   const eligible = scored.filter(({ user }) => {
@@ -46,17 +78,17 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
       return false;
     }
 
-    // Both directions, tracked separately. Your own requirements and the fact
-    // that someone filtered you out are different problems with different fixes,
-    // and the empty state has to name the right one.
-    const yours = checkEligibility(viewer, user);
-    if (!yours.eligible) {
-      blocked.push(...yours.failures);
-      return false;
-    }
-
-    if (!checkEligibility(user, viewer).eligible) {
-      blocked.push('their_requirements');
+    // Both directions, tracked separately, through the one shared definition.
+    // Your own requirements and the fact that someone filtered you out are
+    // different problems with different fixes, and the empty state has to name
+    // the right one — which is why `mutualGate` keeps them apart rather than
+    // merging them into a single list.
+    const gate = mutualGate(viewer, user);
+    if (!gate.eligible) {
+      // A pair can fail both ways. Naming your own filters is only true when your
+      // filters are the reason, so the other side is reported as theirs.
+      if (gate.blockedByYou.length > 0) blocked.push(...gate.blockedByYou);
+      else blocked.push('their_requirements');
       return false;
     }
 
@@ -66,7 +98,12 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
   eligible.sort((a, b) => b.breakdown.score - a.breakdown.score);
 
   const start = (page - 1) * pageSize;
-  const items = eligible.slice(start, start + pageSize).map(({ user }) => toPublicUser(user));
+  // The breakdown that sorted this page is the one the card renders. Recomputing
+  // it at render time would drop the taste bonus the sort used, so the card
+  // would show a different percentage from the one that put it in this position.
+  const items = eligible
+    .slice(start, start + pageSize)
+    .map(({ user, breakdown }) => ({ user: toPublicUser(user), compatibility: breakdown }));
 
   return {
     items,
@@ -77,7 +114,20 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     // Only on an empty deck. On page 2 of a healthy one, "most people here are
     // blocked by your age range" would be true and useless.
     blockedReason: eligible.length === 0 ? summariseBlockers(blocked) : null,
+    needsTaste: false,
   };
+}
+
+/**
+ * Adapts the feed's taste signal to the shape the scorer takes.
+ *
+ * `tasteBetween` returns the same fields under different names, so this is the
+ * one place the two vocabularies meet. Done as a function rather than inlined so
+ * the feed does not depend on the matcher's type layout.
+ */
+function tasteSignal(index: TasteIndex, viewerId: string, candidateId: string): TasteSignal {
+  const { affinity, coLikedPosts, sharedTags, reason } = tasteBetween(index, viewerId, candidateId);
+  return { affinity, coLikedPosts, sharedTags, reason };
 }
 
 export async function fetchFeed(page = 1, pageSize = DEFAULT_PAGE_SIZE): Promise<FeedPage> {

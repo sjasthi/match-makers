@@ -7,12 +7,14 @@ import {
 } from '@testing-library/react-native';
 import App from '../../../App';
 import { MockAuthAdapter } from '@/services/auth/MockAuthAdapter';
+import { getAuthAdapter } from '@/services/auth';
 import { mockDb } from '@/services/mock/database';
 import { useAuthStore } from '@/stores/authStore';
 import { useFeedStore, useMatchesStore } from '@/stores/feedStore';
-import { getMissingProfileSections, isProfileComplete } from '@/services/profile';
+import { usePhotoFeedStore } from '@/stores/photoFeedStore';
+import { isProfileComplete } from '@/services/profile';
 import { hasCoordinates } from '@/utils/distance';
-import { Gender, type Photo } from '@match-makers/shared';
+import { Gender, RelationshipGoal, type Photo } from '@match-makers/shared';
 
 jest.setTimeout(180_000);
 
@@ -49,6 +51,7 @@ beforeEach(async () => {
   useAuthStore.setState({ state: 'unknown', user: null, error: null });
   useFeedStore.getState().reset();
   useMatchesStore.getState().reset();
+  usePhotoFeedStore.getState().reset();
   await mockDb.reset();
 });
 
@@ -124,41 +127,130 @@ async function completeCreation() {
   fireEvent.press(screen.getByText('Finish setup'));
 }
 
+/**
+ * Moves from the landing photo feed to the Likes tab.
+ *
+ * Creation finishes on the feed rather than on any taste questionnaire, so
+ * every assertion about the deck has to cross the tab bar first.
+ */
+async function openLikesTab() {
+  // The tab bar settles a beat after the flow's last save replaces the root
+  // stack, so it is waited for rather than assumed. Without this the press races
+  // the navigator and fails intermittently on whichever test happens to get
+  // there first.
+  await waitFor(() => expect(screen.getByText('Likes')).toBeTruthy());
+  fireEvent.press(screen.getByText('Likes'));
+  // The deck is empty until the first like, so the building-up strip is not
+  // guaranteed either. The subtitle is, in both states.
+  await waitFor(() =>
+    expect(screen.getByText(/Tap somebody to look|Your deck gathers here/)).toBeTruthy()
+  );
+}
+
 describe('account creation', () => {
-  it('finishes without asking anything about the questionnaire', async () => {
+  it('finishes on the photo feed with nothing to answer first', async () => {
     await registerAndRender();
     await completeCreation();
 
-    // The profile is complete the moment the last step saves, so the feed takes
-    // over directly rather than through a summary screen.
-    await waitFor(() => expect(screen.getByText('What matters to you?')).toBeTruthy());
+    // The feed is the landing page and needs nothing answered to be usable, so
+    // a finished signup lands there with something to do rather than on a form.
+    await waitFor(() => expect(screen.getByTestId('photo-grid')).toBeTruthy());
 
     const user = await storedUser();
-    expect(user?.questionnaire).toBeUndefined();
-    // Creation does not gate on the questionnaire: it is answered in the feed.
+    // Nothing about taste has to be collected before the app is usable, so the
+    // account they just made has answered no photos. The seeded candidates still
+    // carry their own reactions, so this is scoped to the new account's id
+    // rather than counting the whole library.
+    const reactions = (await mockDb.allPostReactions()).filter(
+      (reaction) => reaction.userId === user?.id
+    );
+    expect(reactions).toHaveLength(0);
     expect(isProfileComplete(user ?? null)).toBe(true);
-    expect(getMissingProfileSections(user ?? null)).not.toContain('prompts');
   });
 
-  it('never mentions the questionnaire during creation', async () => {
+  it('never asks a taste question anywhere in creation', async () => {
     await registerAndRender();
     await completeCreation();
+    await openLikesTab();
 
-    await waitFor(() => expect(screen.getByText('What matters to you?')).toBeTruthy());
+    // The questionnaire used to end signup. Every one of these strings lived on
+    // it, and they must not come back as a fresh gate now that taste is inferred
+    // from photos instead.
     expect(screen.queryByText('Day to day')).toBeNull();
     expect(screen.queryByText('I want kids')).toBeNull();
     expect(screen.queryByText('Day to day, the unglamorous stuff')).toBeNull();
   });
 
-  it('shows nothing matchable before the questionnaire is answered', async () => {
+  it('gives a brand new account an empty deck that says why, not a weak card', async () => {
+    await registerAndRender();
+    await completeCreation();
+    await openLikesTab();
+
+    // The decision the whole change turns on, reversed. A new account has no
+    // likes, so the only points left to rank on are the twenty of stated fact,
+    // and the first card this account would have seen was an "11% match, not
+    // enough to go on" that taught anybody who read it that the percentage meant
+    // nothing. An empty deck that names the fix is the honest shape.
+    // Waited for rather than read directly: `openLikesTab` returns as soon as
+    // the subtitle settles, which is before the deck fetch resolves, and the
+    // store is empty-but-unlabelled in between.
+    await waitFor(() =>
+      expect(screen.getByText('Nothing to rank your matches on yet')).toBeTruthy()
+    );
+    expect(screen.queryByTestId(/^deck-card-/)).toBeNull();
+    // The strip is for a deck that exists. On an empty one the empty state says
+    // the same thing and links to the same place, twice over would be noise.
+    expect(screen.queryByTestId('likes-building-up')).toBeNull();
+    // No questionnaire prompt either. What stands between a new account and
+    // cards is one photo like, and the empty state says so in those words.
+    expect(screen.queryByText('What matters to you?')).toBeNull();
+  });
+
+  it('opens the deck on the first like, with no questionnaire prompt anywhere', async () => {
     await registerAndRender();
     await completeCreation();
 
-    await waitFor(() => expect(screen.getByText('Values (0/5)')).toBeTruthy());
-    // No percentage anywhere, and no swipe actions: there is nothing to be
-    // matched on until the questionnaire is answered.
-    expect(screen.queryByText(/\d+%/)).toBeNull();
-    expect(screen.queryByTestId('swipe-like')).toBeNull();
+    // Widened before the deck is opened, because what this test is about is
+    // whether a questionnaire prompt stands between a new account and its cards.
+    // Creation leaves the account on its chosen filters (one gender, a 24-38
+    // range, a 50km radius), and whether a twenty row random seed leaves anyone
+    // matching all three is a coin toss. That makes the card assertion pass or
+    // fail on the seed instead of on the behaviour.
+    // Through the adapter, not `mockDb.saveUser`: the running app reads the
+    // session out of the auth store, which a direct storage write leaves stale.
+    const adapter = getAuthAdapter();
+    const stored = (await adapter.getCurrentUser())!;
+    await adapter.updateProfile({
+      preferences: {
+        ...stored.preferences,
+        genders: [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY],
+        ageRange: { min: 18, max: 99 },
+        relationshipGoals: [
+          RelationshipGoal.LONG_TERM,
+          RelationshipGoal.SHORT_TERM,
+          RelationshipGoal.CASUAL,
+          RelationshipGoal.FRIENDSHIP,
+          RelationshipGoal.NOT_SURE,
+        ],
+        distanceMode: 'global',
+      },
+    });
+
+    // The one thing the deck gates on: a like. Recorded as the feed would
+    // record it, before the tab is opened, so the deck loads with taste to rank
+    // on. `stored` is the fresh account, already in scope from the widening.
+    const posts = await mockDb.allPosts();
+    await mockDb.recordPostReaction(stored.id, posts[0]!.id, 'like');
+
+    await openLikesTab();
+
+    // The old failure mode was a questionnaire prompt where the cards should be.
+    // The gate now is a single like, and the empty state says so in those words,
+    // so nothing else is allowed to stand between a person and their deck.
+    expect(screen.queryByText('What matters to you?')).toBeNull();
+    // Waited for rather than read directly: the grid arrives on the feed fetch
+    // after the tab settles, so reading a card straight away races it.
+    await waitFor(() => expect(screen.getAllByTestId(/^deck-card-/).length).toBeGreaterThan(0));
   });
 });
 
@@ -223,7 +315,7 @@ describe('a city the app cannot place on the map', () => {
 
     // The flow completes rather than bouncing back to the location step, which
     // is what blocking on the save would have caused.
-    await waitFor(() => expect(screen.getByText('What matters to you?')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('photo-grid')).toBeTruthy());
 
     const user = await storedUser();
     expect(user?.location.city).toBe('Bradford');
@@ -234,7 +326,7 @@ describe('a city the app cannot place on the map', () => {
   it('resolves a city it does know to real coordinates', async () => {
     await createWithTypedCity('Rotterdam', 'Netherlands');
 
-    await waitFor(() => expect(screen.getByText('What matters to you?')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('photo-grid')).toBeTruthy());
 
     const user = await storedUser();
     expect(hasCoordinates(user!.location)).toBe(true);

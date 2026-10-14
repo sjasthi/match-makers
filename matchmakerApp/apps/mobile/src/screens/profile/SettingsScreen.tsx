@@ -70,7 +70,26 @@ export function SettingsScreen() {
             <AuthModeSwitcher value={authMode} onChange={changeAuthMode} />
           </View>
 
-          <AdminRow enabled={isMock} onPress={() => navigation.navigate('AdminUsers')} />
+          <AdminRow
+            enabled={isMock}
+            onPress={() => navigation.navigate('AdminUsers')}
+            label="Admin: all users"
+            hint="Read-only. Every account in the mock database."
+            disabledHint="Switch to mock mode to inspect seeded users."
+            icon="shield-account"
+          />
+
+          {/* The only write path in the app. Separate from the read-only row
+              above so it is obvious which one of the two can change something. */}
+          <AdminRow
+            enabled={isMock}
+            onPress={() => navigation.navigate('AdminPosts')}
+            label="Admin: photo library"
+            hint="Import and tag the site-owned photos the feed shows."
+            disabledHint="Switch to mock mode to import photos."
+            icon="image-multiple-outline"
+            testID="settings-admin-posts-row"
+          />
 
           <Pressable
             onPress={() => void resetMockData()}
@@ -102,7 +121,23 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function AdminRow({ enabled, onPress }: { enabled: boolean; onPress: () => void }) {
+function AdminRow({
+  enabled,
+  onPress,
+  label,
+  hint,
+  disabledHint,
+  icon,
+  testID,
+}: {
+  enabled: boolean;
+  onPress: () => void;
+  label: string;
+  hint: string;
+  disabledHint: string;
+  icon: 'shield-account' | 'image-multiple-outline';
+  testID?: string;
+}) {
   return (
     <Pressable
       onPress={enabled ? onPress : undefined}
@@ -110,21 +145,15 @@ function AdminRow({ enabled, onPress }: { enabled: boolean; onPress: () => void 
       style={styles.adminRow}
       accessibilityRole="button"
       accessibilityState={{ disabled: !enabled }}
-      testID="settings-admin-row"
+      testID={testID ?? 'settings-admin-row'}
     >
-      <AppIcon
-        name="shield-account"
-        size={20}
-        color={enabled ? COLORS.textSecondary : COLORS.textMuted}
-      />
+      <AppIcon name={icon} size={20} color={enabled ? COLORS.textSecondary : COLORS.textMuted} />
       <View style={styles.adminBody}>
         <Text variant="bodyLarge" style={!enabled && styles.adminDisabledText}>
-          Admin: all users
+          {label}
         </Text>
         <Text variant="bodySmall" style={styles.adminHint}>
-          {enabled
-            ? 'Read-only. Every account in the mock database.'
-            : 'Switch to mock mode to inspect seeded users.'}
+          {enabled ? hint : disabledHint}
         </Text>
       </View>
     </Pressable>

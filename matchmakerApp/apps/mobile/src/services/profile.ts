@@ -1,34 +1,7 @@
-import { questionnaireSchema } from '@match-makers/shared';
 import type { User, VerificationStatus } from '@match-makers/shared';
 import { APP_CONFIG } from '@/constants';
 import { getAuthAdapter } from '@/services/auth';
 import { getApiClient } from '@/services/api/client';
-
-/**
- * True once the questionnaire is a whole, valid answer set, which is what makes
- * a match percentage meaningful.
- *
- * The schema is the source of truth rather than a hand-rolled field check, so
- * this stays honest as the questionnaire grows: a half-graded value or a deal
- * breaker that is not in the picked list fails here exactly as it would on the
- * server.
- *
- * This is not what gates the feed. Prompts are answered progressively, so a
- * partially answered questionnaire is a normal state rather than an error.
- */
-export function hasCompleteQuestionnaire(user: User | null): boolean {
-  if (!user?.questionnaire) return false;
-  return questionnaireSchema.safeParse(user.questionnaire).success;
-}
-
-/**
- * True once the questionnaire is answered enough to be matched on.
- *
- * This is what gates the deck, not `isProfileComplete`. Account creation ends
- * without it and the feed opens onto the questionnaire instead, because the
- * answer set is a long one and asking for it up front is what we were trying to
- * get away from.
- */
 
 /** True while the profile is too incomplete to show in the feed. */
 export function isProfileComplete(user: User | null): boolean {

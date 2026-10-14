@@ -26,6 +26,16 @@ export const API_CONFIG = {
 
 export const APP_CONFIG = {
   MAX_PHOTOS: 6,
+  /** Photos one admin import may add, bounding a single storage write. */
+  MAX_POST_IMPORT: 12,
+  /**
+   * Photos per page in the grid.
+   *
+   * Small enough that a page fits on a phone without an endless scroll and the
+   * footer controls are reachable, large enough that the grid reads as a wall of
+   * pictures rather than a suggestion.
+   */
+  FEED_PAGE_SIZE: 10,
   MIN_AGE: 18,
   MAX_AGE: 100,
   MAX_DISTANCE: 500,

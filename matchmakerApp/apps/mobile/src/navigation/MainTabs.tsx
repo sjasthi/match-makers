@@ -1,6 +1,7 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { AppIcon, type IconName } from '@/components';
-import { FeedScreen } from '@/screens/main/FeedScreen';
+import { PhotoFeedScreen } from '@/screens/main/PhotoFeedScreen';
+import { LikesScreen } from '@/screens/main/LikesScreen';
 import { MatchesScreen } from '@/screens/main/MatchesScreen';
 import { MessagesScreen } from '@/screens/main/MessagesScreen';
 import { ProfileScreen } from '@/screens/main/ProfileScreen';
@@ -9,8 +10,14 @@ import type { MainTabParamList } from './types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+/**
+ * The first two icons are deliberately distinct shapes rather than two hearts.
+ * "Feed" is content and "Likes" is people, and a user who has just liked a photo
+ * needs to be able to tell at a glance that they have not also liked a person.
+ */
 const TAB_ICONS: Record<keyof MainTabParamList, IconName> = {
-  Feed: 'cards-outline',
+  Feed: 'image-multiple-outline',
+  Likes: 'cards-outline',
   Matches: 'heart-outline',
   Messages: 'message-text-outline',
   Profile: 'account-circle-outline',
@@ -29,7 +36,8 @@ export function MainTabs() {
         ),
       })}
     >
-      <Tab.Screen name="Feed" component={FeedScreen} options={{ title: 'Discover' }} />
+      <Tab.Screen name="Feed" component={PhotoFeedScreen} options={{ title: 'Photos' }} />
+      <Tab.Screen name="Likes" component={LikesScreen} options={{ title: 'Likes' }} />
       <Tab.Screen name="Matches" component={MatchesScreen} />
       <Tab.Screen name="Messages" component={MessagesScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />

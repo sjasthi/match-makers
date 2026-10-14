@@ -8,7 +8,6 @@ import { useAuthMode, useCurrentUser } from '@/hooks';
 import { getAdminUser } from '@/services/admin';
 import { ageFromDateOfBirth } from '@/utils/mockData';
 import { hasCoordinates } from '@/utils/distance';
-import { choiceLabel, promptQuestion, tagLabel } from '@/prompts';
 import { COLORS, SPACING } from '@/constants';
 import type { ProfileStackParamList } from '@/navigation/types';
 
@@ -97,10 +96,6 @@ export function AdminUserDetailScreen() {
           <Row label="createdAt" value={user.createdAt} />
           <Row label="updatedAt" value={user.updatedAt} />
           <Row label="isVerified" value={user.isVerified ? 'true' : 'false'} />
-          <Row
-            label="questionnaire"
-            value={user.questionnaire ? 'present' : 'absent (still onboarding)'}
-          />
         </Section>
 
         <Section title="Basics">
@@ -182,76 +177,6 @@ export function AdminUserDetailScreen() {
           </Text>
         </Section>
 
-        {user.questionnaire ? (
-          <>
-            <Section title={`Values (${user.questionnaire.values.length})`}>
-              {user.questionnaire.values.length === 0 ? (
-                <Row label="" value="(none)" />
-              ) : (
-                user.questionnaire.values.map((value) => (
-                  <Row
-                    key={value}
-                    label={value.replace(/_/g, ' ')}
-                    value={`importance ${user.questionnaire?.importance[value] ?? '-'}`}
-                  />
-                ))
-              )}
-            </Section>
-
-            <Section title={`Deal breakers (${user.questionnaire.dealBreakers.length})`}>
-              {user.questionnaire.dealBreakers.length === 0 ? (
-                <Row label="" value="(none)" />
-              ) : (
-                user.questionnaire.dealBreakers.map((value) => (
-                  <Row key={value} label={value.replace(/_/g, ' ')} value="veto" />
-                ))
-              )}
-            </Section>
-
-            <Section title={`Prompts (${user.questionnaire.prompts.length})`}>
-              {user.questionnaire.prompts.length === 0 ? (
-                <Row label="" value="(none)" />
-              ) : (
-                user.questionnaire.prompts.map((answer) => (
-                  <View key={answer.promptId} style={styles.prompt}>
-                    <Text variant="bodySmall" style={styles.promptTag}>
-                      {tagLabel(answer.tag)}
-                    </Text>
-                    <Text variant="bodyMedium" style={styles.promptQuestion}>
-                      {promptQuestion(answer.promptId, answer.tag)}
-                    </Text>
-                    <Text variant="bodyMedium">{choiceLabel(answer.choice)}</Text>
-                    {answer.note ? (
-                      <Text variant="bodySmall" style={styles.muted}>
-                        {answer.note}
-                      </Text>
-                    ) : null}
-                  </View>
-                ))
-              )}
-            </Section>
-
-            <Section title="Lifestyle">
-              <Row
-                label="schedule"
-                value={user.questionnaire.lifestyle.schedule.replace(/_/g, ' ')}
-              />
-              <Row
-                label="exercise"
-                value={user.questionnaire.lifestyle.exercise.replace(/_/g, ' ')}
-              />
-              <Row
-                label="smoking"
-                value={user.questionnaire.lifestyle.smoking.replace(/_/g, ' ')}
-              />
-              <Row
-                label="drinking"
-                value={user.questionnaire.lifestyle.drinking.replace(/_/g, ' ')}
-              />
-              <Row label="pets" value={user.questionnaire.lifestyle.pets.replace(/_/g, ' ')} />
-            </Section>
-          </>
-        ) : null}
       </View>
     </ScreenContainer>
   );

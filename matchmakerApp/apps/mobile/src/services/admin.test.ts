@@ -2,7 +2,7 @@ import { listAllUsers, getAdminUser, AdminUnavailableError } from './admin';
 import { mockDb } from '@/services/mock/database';
 import { MockAuthAdapter } from '@/services/auth/MockAuthAdapter';
 import { setActiveAuthMode } from '@/services/auth';
-import { hasCompleteQuestionnaire, isProfileComplete } from '@/services/profile';
+import { isProfileComplete } from '@/services/profile';
 import { DEMO_EMAIL, DEMO_PASSWORD } from '@/utils/mockData';
 
 jest.setTimeout(60_000);
@@ -66,7 +66,6 @@ describe('admin service', () => {
     // the feed is actually willing to render.
     for (const summary of users) {
       expect(summary.isProfileComplete).toBe(isProfileComplete(summary.user));
-      expect(summary.hasCompleteQuestionnaire).toBe(hasCompleteQuestionnaire(summary.user));
     }
   });
 
@@ -87,7 +86,9 @@ describe('admin service', () => {
     expect(registered).toBeDefined();
     // A blank registration is exactly what the inspector exists to show.
     expect(registered?.isProfileComplete).toBe(false);
-    expect(registered?.hasCompleteQuestionnaire).toBe(false);
+    // A freshly registered account has answered no photos, so the matcher has
+    // nothing from it yet.
+    expect(registered?.answeredPhotos).toBe(0);
   });
 
   it('reads one record in full and strips the password', async () => {

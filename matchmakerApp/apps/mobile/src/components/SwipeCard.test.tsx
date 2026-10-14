@@ -1,9 +1,8 @@
 import { render, screen } from '@testing-library/react-native';
 import { SwipeCard } from './SwipeCard';
-import { generateDemoUser, generateMockUser, generateMockUsers } from '@/utils/mockData';
-import { questionnaireSchema, PromptChoice, type User } from '@match-makers/shared';
-import { PROMPTS, promptQuestion } from '@/prompts';
-import { scoreCompatibility } from '@/utils/matching';
+import { generateDemoUser, generateMockUser } from '@/utils/mockData';
+import type { User } from '@match-makers/shared';
+import { scoreCompatibility, type TasteSignal } from '@/utils/matching';
 
 function renderCard(viewer: User, candidate: User) {
   return render(
@@ -17,102 +16,85 @@ function renderCard(viewer: User, candidate: User) {
   );
 }
 
-/** A seeded candidate with one of their answers forced to match the viewer's. */
-function agreeingCandidate(viewer: User): User {
-  const candidate = generateMockUser(4) as User;
-  const [first] = viewer.questionnaire!.prompts;
-  return {
-    ...candidate,
-    questionnaire: {
-      ...candidate.questionnaire!,
-      prompts: [
-        { ...first! },
-        ...candidate.questionnaire!.prompts.filter((answer) => answer.tag !== first!.tag),
-      ],
-    },
-  };
-}
-
 /**
- * A candidate who answers the opposite of the viewer on every prompt they share.
+ * The taste signal the card is handed.
  *
- * `family` is dropped rather than flipped: the demo account answers it
- * "Sometimes", which has no zero-affinity partner among the four choices, so it
- * would register as partial agreement no matter what the other person said.
+ * The card takes the breakdown the deck was ordered by rather than re-scoring
+ * itself, and these tests drive that prop directly. That matters because the
+ * reason under the card is the whole legibility argument, and it only exists if
+ * the card renders the score the deck actually sorted by.
  */
-function contradictingCandidate(viewer: User): User {
-  const candidate = generateMockUser(4) as User;
-  return {
-    ...candidate,
-    questionnaire: {
-      ...candidate.questionnaire!,
-      prompts: viewer
-        .questionnaire!.prompts.filter((answer) => answer.choice !== PromptChoice.SOMETIMES)
-        .map((answer) => ({
-          ...answer,
-          choice:
-            answer.choice === PromptChoice.YES ? PromptChoice.NO : (PromptChoice.YES as const),
-        })),
-    },
-  };
+function tasteFor(affinity: number, reason: string | null = 'You both liked the same photos'): TasteSignal {
+  return { affinity, coLikedPosts: 3, sharedTags: ['pet'], reason };
 }
 
 describe('SwipeCard', () => {
   const viewer = generateDemoUser() as User;
+  const candidate = generateMockUser(4) as User;
+
+  function renderWithTaste(taste?: TasteSignal) {
+    return render(
+      <SwipeCard
+        user={candidate}
+        viewer={viewer}
+        compatibility={scoreCompatibility(viewer, candidate, taste)}
+        onLike={() => {}}
+        onPass={() => {}}
+        onSuperLike={() => {}}
+      />
+    );
+  }
 
   it('shows the percentage and not a raw id', () => {
-    renderCard(viewer, generateMockUser(4) as User);
-    // The seeded prompt ids must be real, or every prompt surface has to
-    // render a bare tag like "food_1".
-    expect(screen.queryByText(/_[0-9]$/)).toBeNull();
+    renderWithTaste();
+    const text = JSON.stringify(screen.toJSON());
+    expect(text).toContain('%');
+    expect(text).not.toContain('compatibility');
   });
 
-  it('surfaces an agreed prompt as an icebreaker', () => {
-    const candidate = agreeingCandidate(viewer);
-    const { agreements } = scoreCompatibility(viewer, candidate);
-    expect(agreements.length).toBeGreaterThan(0);
-
-    renderCard(viewer, candidate);
-
-    // The card leads with the strongest agreement, which is the prompt that
-    // justifies the score being what it is.
-    const answer = candidate.questionnaire!.prompts.find(
-      (candidateAnswer) => candidateAnswer.tag === agreements[0]!.tag
-    )!;
-    expect(screen.getByText(promptQuestion(answer.promptId, answer.tag))).toBeTruthy();
+  it('shows the shared-taste reason in words', () => {
+    // A percentage somebody cannot interrogate is the thing users distrust most,
+    // and the sentence is the only part they actually chose.
+    renderWithTaste(tasteFor(0.8));
+    expect(screen.getByTestId('swipe-card-reason')).toBeTruthy();
+    expect(screen.getByText('You both liked the same photos')).toBeTruthy();
   });
 
-  it('never leads with a prompt the two of you answered differently', () => {
-    // The regression this guards: co-answering used to be enough to be called a
-    // shared prompt, so the card could open with a question the viewer had
-    // given the opposite answer to.
-    const candidate = contradictingCandidate(viewer);
-    const result = scoreCompatibility(viewer, candidate);
-    expect(result.conflicts.length).toBeGreaterThan(0);
-    expect(result.agreements).toEqual([]);
-
-    renderCard(viewer, candidate);
-
-    for (const conflict of result.conflicts) {
-      const answer = candidate.questionnaire!.prompts.find((a) => a.tag === conflict.tag)!;
-      expect(screen.queryByText(promptQuestion(answer.promptId, answer.tag))).toBeNull();
-    }
-    expect(screen.getByText(`${result.conflicts.length} differ`)).toBeTruthy();
-    // No "agreed on" chip either, since there is no agreement to report.
-    expect(screen.queryByText(/agreed on/)).toBeNull();
+  it('shows no reason when there is no shared evidence', () => {
+    renderWithTaste();
+    // Silence is the honest rendering. An empty sentence would look like a bug and
+    // a placeholder would look like a claim.
+    expect(screen.queryByTestId('swipe-card-reason')).toBeNull();
   });
 
-  it('shows no icebreaker when the two people answered nothing in common', () => {
-    const bare = { ...generateMockUser(9), questionnaire: undefined } as User;
-    expect(scoreCompatibility(viewer, bare).agreements).toEqual([]);
-    renderCard(viewer, bare);
-    expect(screen.queryByText("I'd rather cook than eat out")).toBeNull();
+  it('renders the score it is handed rather than recomputing one', () => {
+    const breakdown = scoreCompatibility(viewer, candidate, tasteFor(0.8));
+    render(
+      <SwipeCard
+        user={candidate}
+        viewer={viewer}
+        compatibility={breakdown}
+        onLike={() => {}}
+        onPass={() => {}}
+        onSuperLike={() => {}}
+      />
+    );
+    expect(screen.getByTestId('swipe-card-reason')).toBeTruthy();
   });
 
-  it('still renders a candidate who has answered nothing', () => {
-    const bare = { ...generateMockUser(9), questionnaire: undefined } as User;
-    renderCard(viewer, bare);
-    expect(screen.getByText(bare.name)).toBeTruthy();
+  it('still renders a candidate who has answered no photos', () => {
+    // Nobody is answered-nothing any more now the questionnaire is gone, but the
+    // signal is still empty for a new pair and the card must not care.
+    render(
+      <SwipeCard
+        user={candidate}
+        viewer={viewer}
+        onLike={() => {}}
+        onPass={() => {}}
+        onSuperLike={() => {}}
+      />
+    );
+    expect(screen.getByText(candidate.name)).toBeTruthy();
   });
 });
 
@@ -160,22 +142,5 @@ describe('distance on the card', () => {
     renderCard(globalViewer, candidate);
 
     expect(screen.getByText(/Singapore · \d+ km away/)).toBeTruthy();
-  });
-});
-
-describe('seeded prompt answers', () => {
-  it('every seeded answer references a prompt that exists', () => {
-    const ids = new Set(PROMPTS.map((prompt) => prompt.id));
-    for (const user of generateMockUsers(20)) {
-      for (const answer of user.questionnaire!.prompts) {
-        expect(ids.has(answer.promptId)).toBe(true);
-      }
-    }
-  });
-
-  it('every seeded questionnaire satisfies the shared schema', () => {
-    for (const user of generateMockUsers(20)) {
-      expect(questionnaireSchema.safeParse(user.questionnaire).success).toBe(true);
-    }
   });
 });

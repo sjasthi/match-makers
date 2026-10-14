@@ -12,8 +12,17 @@ export { ProfileImage, avatarColor, initialsFor, hashString } from './ProfileIma
 export { PhotoManager } from './PhotoManager';
 export { PrimaryButton } from './PrimaryButton';
 export { ErrorBanner } from './ErrorBanner';
+export { PersonTile, personTileGridStyle } from './PersonTile';
+export { TasteMatchGrid, signalFromClosest } from './TasteMatchGrid';
+export type { ClosestPerson } from './TasteMatchGrid';
 export { SelectChips } from './SelectChips';
 export type { ChipOption } from './SelectChips';
 export { Stepper } from './Stepper';
 export { DiscoveryPreferences, defaultPreferences, describeDistance } from './DiscoveryPreferences';
-export { ImportanceScaleControl } from './ImportanceScale';
+export { PhotoPostCard } from './PhotoPostCard';
+export { PostActions } from './PostActions';
+export { TasteSummary } from './TasteSummary';
+export { TagInput } from './TagInput';
+export { PhotoTile } from './PhotoTile';
+export { PhotoGrid } from './PhotoGrid';
+export { PostViewer } from './PostViewer';

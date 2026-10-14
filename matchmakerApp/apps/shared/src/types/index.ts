@@ -25,146 +25,18 @@ export enum RelationshipGoal {
   NOT_SURE = 'not_sure',
 }
 
-/** Traits a person says actually matter to them in a partner. */
-export enum PartnerValue {
-  KINDNESS = 'kindness',
-  SENSE_OF_HUMOUR = 'sense_of_humour',
-  AMBITION = 'ambition',
-  SHARED_INTERESTS = 'shared_interests',
-  PHYSICAL_CLOSENESS = 'physical_closeness',
-  INDEPENDENCE = 'independence',
-  EMOTIONAL_OPENNESS = 'emotional_openness',
-  FAMILY = 'family',
-}
-
-/**
- * The dimension a prompt measures.
+/*
+ * The FP3 questionnaire (`UserQuestionnaire`, `PartnerValue`, `PromptTag`,
+ * `PromptChoice`, `ImportanceScale`, `LifestyleAnswers` and friends) was removed
+ * here. It was a third of the match score and the only stated evidence of what
+ * somebody wanted in a partner; the photo feed replaced it, and
+ * `User.preferences` became a hard gate rather than a set of scoring signals.
  *
- * A prompt is a real question ("Your ideal weekend looks like...") that
- * carries a tag, so two people who both answered it are answering the same
- * thing. That is what makes the comparison meaningful: an earlier version
- * collected 24 free-floating interest tags and compared them, but almost no
- * two people happened to pick the same set, so the signal never moved off zero.
+ * Stored records written before this may still carry a `questionnaire` key.
+ * Nothing reads it - see `services/mock/migrate.ts` - and it is left in place
+ * rather than deleted, because wiping real user data that is not causing a
+ * problem is not worth the migration risk.
  */
-export enum PromptTag {
-  FAMILY = 'family',
-  LEISURE = 'leisure',
-  FOOD = 'food',
-  MUSIC = 'music',
-  LEARNING = 'learning',
-  TRAVEL = 'travel',
-  RECOVERY = 'recovery',
-  CHARACTER = 'character',
-}
-
-/**
- * The closed set of answers a given prompt accepts.
- *
- * A prompt always offers one of these, which is what makes it scorable. The
- * free-text `note` on `PromptAnswer` is shown to other people as an icebreaker
- * but is never part of the score: there is no defensible way to turn prose
- * into a percentage without a model behind it.
- */
-export enum PromptChoice {
-  YES = 'yes',
-  NO = 'no',
-  SOMETIMES = 'sometimes',
-  DEPENDS = 'depends',
-}
-
-export interface PromptAnswer {
-  /** Which question was answered. Stable across releases so stored data holds. */
-  promptId: string;
-  tag: PromptTag;
-  choice: PromptChoice;
-  /** Unscoped free text, for other people to read. */
-  note?: string;
-}
-
-export enum ScheduleType {
-  EARLY_BIRD = 'early_bird',
-  NIGHT_OWL = 'night_owl',
-  FLEXIBLE = 'flexible',
-}
-
-export enum ExerciseLevel {
-  NONE = 'none',
-  LIGHT = 'light',
-  MODERATE = 'moderate',
-  A_LOT = 'a_lot',
-}
-
-export enum KidsPreference {
-  WANT_KIDS = 'want_kids',
-  HAVE_KIDS = 'have_kids',
-  DO_NOT_WANT_KIDS = 'do_not_want_kids',
-  OPEN = 'open',
-}
-
-export enum SmokingStatus {
-  NEVER = 'never',
-  SOCIALLY = 'socially',
-  DAILY = 'daily',
-  PREFER_NOT_TO_SAY = 'prefer_not_to_say',
-}
-
-export enum DrinkingStatus {
-  NEVER = 'never',
-  SOCIALLY = 'socially',
-  OFTEN = 'often',
-  PREFER_NOT_TO_SAY = 'prefer_not_to_say',
-}
-
-export enum PetsPreference {
-  LOVE_PETS = 'love_pets',
-  HAVE_PETS = 'have_pets',
-  ALLERGIC = 'allergic',
-  NO_PREFERENCE = 'no_preference',
-}
-
-export interface LifestyleAnswers {
-  schedule: ScheduleType;
-  exercise: ExerciseLevel;
-  smoking: SmokingStatus;
-  drinking: DrinkingStatus;
-  pets: PetsPreference;
-}
-
-/**
- * How much a value matters. The numbers are the weight the future matching
- * engine will read, so they are stored rather than recomputed from an ordinal.
- */
-export enum ImportanceScale {
-  NICE_TO_HAVE = 1,
-  FAIRLY_IMPORTANT = 2,
-  IMPORTANT = 3,
-  VERY_IMPORTANT = 4,
-  NON_NEGOTIABLE = 5,
-}
-
-export const MIN_IMPORTANCE = ImportanceScale.NICE_TO_HAVE;
-export const MAX_IMPORTANCE = ImportanceScale.NON_NEGOTIABLE;
-
-export type ValueImportance = Partial<Record<PartnerValue, ImportanceScale>>;
-
-/**
- * The FP3 questionnaire answers.
- *
- * This is what the matching engine scores, and `scoreCompatibility` in the
- * mobile app reads every field of it. The schema lives in shared so the backend
- * reads the same definitions the app already validates against.
- */
-export interface UserQuestionnaire {
-  values: PartnerValue[];
-  /** Required for every entry in `values`; that is what makes it a weight. */
-  importance: ValueImportance;
-  /** A `values` entry the other person should never have picked. Acts as a veto, not a deduction. */
-  dealBreakers: PartnerValue[];
-  /** Tagged prompt answers. Compared on shared tags, so see `PromptTag`. */
-  prompts: PromptAnswer[];
-  lifestyle: LifestyleAnswers;
-}
-
 export interface User {
   id: string;
   email: string;
@@ -177,11 +49,6 @@ export interface User {
   photos: Photo[];
   location: Location;
   preferences: UserPreferences;
-  /**
-   * Absent until the questionnaire is finished, which is what keeps a new
-   * account in onboarding instead of dropping straight into the feed.
-   */
-  questionnaire?: UserQuestionnaire;
   isVerified: boolean;
   createdAt: string;
   updatedAt: string;
@@ -228,12 +95,12 @@ export interface UserPreferences {
 }
 
 /**
- * Everything the FP3 account-creation questionnaire collects, in one shape.
+ * Everything account creation collects, in one shape.
  *
  * The app saves each section as it is completed rather than posting this whole
  * object at the end, but the backend needs it as the contract for a single
- * setup call. Replaces the old `ProfileSetupData`, which referenced a browser
- * `File` and so could never have been satisfied from React Native.
+ * setup call. The questionnaire that used to be the last field is gone; what it
+ * used to tell the matcher about somebody now comes from the photos they answer.
  */
 export interface ProfileSetupPayload {
   name: string;
@@ -245,8 +112,106 @@ export interface ProfileSetupPayload {
   photos: Photo[];
   location: Location;
   preferences: UserPreferences;
-  questionnaire: UserQuestionnaire;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Photo feed (FP4)                                                            */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * There was an `InterestTag` enum here: a closed set of ten subjects, on the
+ * argument that the matcher has to compare two people and free text gives it
+ * nothing to compare. It was removed because a ten-word vocabulary is a real
+ * limit on what a photo library can say, and the comparison problem is better
+ * solved by folding spelling than by forbidding words.
+ *
+ * `Post.tags` is now `string[]`. The guard rails that replaced the enum live in
+ * `apps/shared/src/tags.ts`: `normaliseTag` folds case, spacing and plurals, and
+ * `postTagSchema` caps length and count. Do not reintroduce a closed set without
+ * re-reading `fp_reviews.md`, which argues the other way on purpose.
+ */
+
+/**
+ * One photo in the site-owned library, with no author.
+ *
+ * Posts belong to the platform, not to a profile. They are not a social feature:
+ * the feed is an input device for working out what somebody likes, and the
+ * matching that comes out of it happens between people rather than between a
+ * person and whoever posted the picture. That is why there is no `userId` here
+ * and why a post cannot be matched to an author.
+ */
+export interface Post {
+  id: string;
+  /**
+   * Where the image lives.
+   *
+   * Empty means "draw the generated tile instead", which is the same fallback
+   * `ProfileImage` uses for a profile with no upload. A real value is a device
+   * file URI from the admin importer, or a data URI on web, where blob URLs do
+   * not survive a reload.
+   */
+  imageUri: string;
+  /**
+   * A grid-sized copy of the same photo.
+   *
+   * Optional rather than an empty string, because absence is meaningful: a post
+   * written before the importer produced two copies simply has one, and it must
+   * keep rendering rather than be rejected or rewritten. Consumers fall back to
+   * `imageUri` when it is missing.
+   *
+   * The grid and the full-screen viewer want genuinely different files. A masonry
+   * tile is about 160 points wide and the viewer about 330, so one stored image
+   * means either the grid decodes full-size bitmaps ten at a time or the viewer
+   * upscales a thumbnail. On a phone that is the difference between a soft
+   * full-screen photo and a sharp one.
+   */
+  thumbUri?: string;
+  /**
+   * Pixel dimensions of `imageUri`, recorded at import.
+   *
+   * Stored rather than measured with `Image.getSize` for the same reason
+   * `tileAspectRatio` avoided measuring: measurement resolves after first paint,
+   * so the full-screen card would visibly re-flow as photos loaded. A value read
+   * from storage is known on the first frame.
+   *
+   * Absent on seeded posts and on anything imported before this existed; the
+   * viewer falls back to filling its box rather than assuming a ratio.
+   */
+  width?: number;
+  height?: number;
+  /**
+   * Free text, in the canonical form `normaliseTag` produces. Ordered, and never
+   * empty. The first entry is the primary tag: it is the one shown as the caption
+   * and the one a co-like is attributed to in the match reason, so it has to be a
+   * defined thing rather than "whichever came first when rendering".
+   */
+  tags: string[];
+  createdAt: string;
+}
+
+/**
+ * One person's answer to one post. At most one row per (userId, postId); a
+ * second reaction replaces the first rather than stacking, so a dislike after a
+ * like means dislike and never both.
+ */
+export interface PostReaction {
+  id: string;
+  userId: string;
+  postId: string;
+  action: PostReactionAction;
+  createdAt: string;
+}
+
+/**
+ * `like` is evidence and `dislike` is not.
+ *
+ * A like is a positive statement about what somebody wants, so it counts towards
+ * the affinity between two people. A dislike is only a steering signal for the
+ * feed itself: it suppresses similar photos from appearing again. Two people
+ * disliking the same photo have not agreed on anything, and counting it would
+ * pair them for the one thing they demonstrably do not share.
+ */
+export type PostReactionAction = 'like' | 'dislike';
 
 export interface SwipeAction {
   type: 'like' | 'pass' | 'super_like';

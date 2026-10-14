@@ -1,4 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor as rtlWaitFor,
+} from '@testing-library/react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -45,6 +50,17 @@ async function signInDemo() {
 /** The stepper is only on screen while the nearby radius is in force. */
 function radiusStepper() {
   return screen.queryByTestId('stepper-increase-within');
+}
+
+/**
+ * RNTL's `waitFor` defaults to a 1000 ms budget, which is not enough for a test
+ * that renders the whole `App` and walks the mock database. Under parallel-worker
+ * load that is not a slow test, it is a failure that only appears on a busy
+ * machine, so every wait here gets a real budget. Per-call `timeout` options
+ * still win, for the few places that assert something slow on purpose.
+ */
+function waitFor(callback: () => unknown, options?: { timeout?: number }) {
+  return rtlWaitFor(callback, { timeout: 30_000, ...options });
 }
 
 describe('Discovery preferences', () => {

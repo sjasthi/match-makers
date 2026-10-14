@@ -10,17 +10,14 @@ import {
 } from 'react-native';
 import type { User } from '@match-makers/shared';
 import { COLORS } from '@/constants';
+import { hashString } from '@/utils/hash';
 
-/** Deterministic hash so a given user always gets the same colour. */
-export function hashString(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(index);
-    // Force a 32-bit int so the value is stable across platforms.
-    hash |= 0;
-  }
-  return Math.abs(hash);
-}
+/**
+ * Re-exported from `utils/hash` so this module stays the single import for
+ * avatar colours, while the hash itself lives with the other pure helpers that
+ * need it.
+ */
+export { hashString };
 
 /** Background colour for a user's generated avatar, stable across renders. */
 export function avatarColor(seed: string): string {

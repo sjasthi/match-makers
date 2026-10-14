@@ -1,81 +1,77 @@
 import type { User } from '@match-makers/shared';
+import { normaliseTag } from '@match-makers/shared';
 import {
-  questionnaireSchema,
-  MAX_VALUES,
-  MIN_PROMPTS,
-  MIN_IMPORTANCE,
-  MAX_IMPORTANCE,
-} from '@match-makers/shared';
-import { generateMockUsers, generateDemoUser } from './mockData';
+  generateMockUsers,
+  generateDemoUser,
+  generateSeedPosts,
+  seedReactionsFor,
+} from './mockData';
 import { findCityCentroid } from './cityCatalog';
 import { distanceKm, hasCoordinates } from './distance';
 
-describe('seeded questionnaire data', () => {
-  const candidates = generateMockUsers(40);
-
-  it('gives every candidate a questionnaire the shared schema accepts', () => {
-    const invalid = candidates.filter(
-      (user) => !questionnaireSchema.safeParse(user.questionnaire).success
-    );
-    expect(invalid.map((user) => user.id)).toEqual([]);
+describe('seeded photo library', () => {
+  it('gives every seeded post at least one tag', () => {
+    const posts = generateSeedPosts(24);
+    expect(posts.length).toBe(24);
+    for (const post of posts) {
+      expect(post.tags.length).toBeGreaterThan(0);
+    }
   });
 
-  it('rates every value a candidate selected', () => {
-    for (const user of candidates) {
-      const { values, importance } = user.questionnaire!;
-      for (const value of values) {
-        expect(importance[value]).toBeDefined();
+  it('writes tags in the canonical form, so the seed needs no folding', () => {
+    // The importer folds on write and the migration folds on load. The seed
+    // skipping that is only safe because it is already canonical, and a change to
+    // the fold rule would quietly corrupt the shipped data otherwise.
+    for (const post of generateSeedPosts(24)) {
+      for (const tag of post.tags) {
+        expect(normaliseTag(tag)).toBe(tag);
       }
     }
   });
 
-  it('keeps importance inside the advertised scale', () => {
-    for (const user of candidates) {
-      for (const rating of Object.values(user.questionnaire!.importance)) {
-        expect(rating).toBeGreaterThanOrEqual(MIN_IMPORTANCE);
-        expect(rating).toBeLessThanOrEqual(MAX_IMPORTANCE);
-      }
+  it('never writes a post with no image and no way to tell what it is', () => {
+    for (const post of generateSeedPosts(24)) {
+      expect(post.imageUri === '' || post.imageUri.length > 0).toBe(true);
+      expect(post.tags.length).toBeGreaterThan(0);
     }
   });
 
-  it('never rates a deal breaker the same way twice', () => {
-    for (const user of candidates) {
-      for (const value of user.questionnaire!.dealBreakers) {
-        expect(user.questionnaire!.values).toContain(value);
-      }
+  it('uses more than one tag, so the grid is not one flat category', () => {
+    const tags = new Set(generateSeedPosts(24).flatMap((post) => post.tags));
+    expect(tags.size).toBeGreaterThan(4);
+  });
+
+  it('gives candidates reactions, so the taste signal has somebody to compare', () => {
+    const users = generateMockUsers(5);
+    const posts = generateSeedPosts(24);
+    const reactions = seedReactionsFor(users, posts);
+
+    expect(reactions.length).toBeGreaterThan(0);
+    for (const reaction of reactions) {
+      expect(users.some((user) => user.id === reaction.userId)).toBe(true);
+      expect(posts.some((post) => post.id === reaction.postId)).toBe(true);
     }
   });
 
-  it('respects the value cap and the prompt minimum', () => {
-    for (const user of candidates) {
-      expect(user.questionnaire!.values.length).toBeLessThanOrEqual(MAX_VALUES);
-      expect(user.questionnaire!.values.length).toBeGreaterThan(0);
-      expect(user.questionnaire!.prompts.length).toBeGreaterThanOrEqual(MIN_PROMPTS);
+  it('never seeds the same person twice for the same photo', () => {
+    // A duplicate would double-count that photo in the taste index.
+    const users = generateMockUsers(5);
+    const reactions = seedReactionsFor(users, generateSeedPosts(24));
+    const keys = reactions.map((reaction) => `${reaction.userId}:${reaction.postId}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('gives every candidate reactions above the confidence floor', () => {
+    // Below five likes the affinity signal is damped towards nothing, so a seeded
+    // candidate that never clears it would read as incompatible with everybody.
+    const users = generateMockUsers(10);
+    const reactions = seedReactionsFor(users, generateSeedPosts(24));
+    for (const user of users) {
+      const likes = reactions.filter(
+        (reaction) => reaction.userId === user.id && reaction.action === 'like'
+      ).length;
+      expect(likes).toBeGreaterThanOrEqual(5);
     }
-  });
-
-  it('never answers the same prompt tag twice', () => {
-    // Two answers to one tag would score as one prompt but read as two
-    // different opinions on the other person's card.
-    for (const user of candidates) {
-      const tags = user.questionnaire!.prompts.map((answer) => answer.tag);
-      expect(new Set(tags).size).toBe(tags.length);
-    }
-  });
-
-  it('varies answers across candidates rather than seeding everyone the same', () => {
-    const signatures = new Set(
-      candidates.map((user) => [...user.questionnaire!.values].sort().join('|'))
-    );
-    expect(signatures.size).toBeGreaterThan(1);
-  });
-
-  it('is deterministic for a given seed', () => {
-    const first = generateMockUsers(5);
-    const second = generateMockUsers(5);
-    expect(second.map((user) => user.questionnaire)).toEqual(
-      first.map((user) => user.questionnaire)
-    );
   });
 });
 
@@ -126,13 +122,27 @@ describe('seeded locations', () => {
 });
 
 describe('demo account', () => {
-  it('has a complete, valid questionnaire', () => {
-    const demo = generateDemoUser();
-    expect(questionnaireSchema.safeParse(demo.questionnaire).success).toBe(true);
-  });
-
   it('is not random, so the demo always tells the same story', () => {
-    expect(generateDemoUser().questionnaire).toEqual(generateDemoUser().questionnaire);
+    // The demo used to carry a fixed questionnaire for this reason. It has no
+    // questionnaire now, so the guarantee is that the whole persona is identical
+    // between two seeds.
+    //
+    // The two timestamps are excluded because they are the real clock, not seeded
+    // content, and two calls a millisecond apart must not read as a difference.
+    // Excluding them by hand rather than with a matcher so that anything added to
+    // the demo later is still covered by default.
+    const {
+      createdAt: _seededCreatedAt,
+      updatedAt: _seededUpdatedAt,
+      ...first
+    } = generateDemoUser();
+    const {
+      createdAt: _seededCreatedAt2,
+      updatedAt: _seededUpdatedAt2,
+      ...second
+    } = generateDemoUser();
+
+    expect(first).toEqual(second);
   });
 
   it('starts on a nearby radius, so the global toggle has something to reveal', () => {
@@ -158,6 +168,18 @@ describe('seeded preferences', () => {
     for (const user of generateMockUsers(20)) {
       expect(user.preferences.maxDistance).toBeGreaterThan(0);
       expect(user.preferences.maxDistance).toBeLessThanOrEqual(500);
+    }
+  });
+});
+
+describe('the relationship goal gate', () => {
+  it('has every seeded user accept their own goal', () => {
+    // The gate is mutual: you are shown only people whose accept-list you are on
+    // AND who have you on theirs. A user whose own goal is missing from their own
+    // accept-list therefore excludes themselves from everyone like them, which is
+    // how the demo account once ended up with a completely empty deck.
+    for (const user of [...generateMockUsers(25), generateDemoUser()]) {
+      expect(user.preferences.relationshipGoals).toContain(user.relationshipGoal);
     }
   });
 });

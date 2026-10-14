@@ -8,7 +8,7 @@ import {
 } from '@match-makers/shared';
 
 import { generateDemoUser } from './mockData';
-import { checkEligibility, distanceBetween, summariseBlockers } from './eligibility';
+import { checkEligibility, distanceBetween, summariseBlockers, type BlockerCode } from './eligibility';
 
 const AUSTIN: Location = {
   latitude: 30.2672,
@@ -208,6 +208,11 @@ function passesBothWays(a: User, b: User): boolean {
   return checkEligibility(a, b).eligible && checkEligibility(b, a).eligible;
 }
 
+/** The blocker codes one direction produced, for asserting on the reason itself. */
+function blockersFor(seeker: User, target: User): BlockerCode[] {
+  return checkEligibility(seeker, target).failures;
+}
+
 describe('the mutual gate', () => {
   it('requires the target to pass, not just the seeker', () => {
     // The whole point: a one-way filter shows you people who filtered you out.
@@ -262,11 +267,14 @@ describe('the mutual gate', () => {
     expect(passesBothWays(global, nearbyOnly)).toBe(false);
   });
 
-  it('does not gate on relationship goal, which stays a scoring signal', () => {
-    // Documented boundary: goals are the answer to "what are you open to", and
-    // gating on them removes people whose only disagreement is a list choice.
+  it('gates on relationship goal, in both directions', () => {
+    // This used to be a scoring signal only. It is now a hard requirement, and
+    // the gate is mutual: a long-term seeker and a casual-only seeker are each
+    // outside the other's stated requirements, so no amount of shared taste can
+    // put them in front of each other.
     const longTerm = makeUser({
       id: 'user_a',
+      relationshipGoal: RelationshipGoal.LONG_TERM,
       preferences: preferences({ relationshipGoals: [RelationshipGoal.LONG_TERM] }),
     });
     const casual = makeUser({
@@ -274,7 +282,44 @@ describe('the mutual gate', () => {
       relationshipGoal: RelationshipGoal.CASUAL,
       preferences: preferences({ relationshipGoals: [RelationshipGoal.CASUAL] }),
     });
-    expect(passesBothWays(longTerm, casual)).toBe(true);
+    expect(passesBothWays(longTerm, casual)).toBe(false);
+    expect(blockersFor(longTerm, casual)).toContain('goal');
+    expect(blockersFor(casual, longTerm)).toContain('goal');
+  });
+
+  it('lets a perfect taste match through when the goals overlap', () => {
+    // The gate is the floor, not the ranking. People who are each open to the
+    // other's goal are still ordered by taste afterwards.
+    const longTerm = makeUser({
+      id: 'user_a',
+      relationshipGoal: RelationshipGoal.LONG_TERM,
+      preferences: preferences({ relationshipGoals: [RelationshipGoal.LONG_TERM] }),
+    });
+    const alsoLongTerm = makeUser({
+      id: 'user_b',
+      relationshipGoal: RelationshipGoal.LONG_TERM,
+      preferences: preferences({ relationshipGoals: [RelationshipGoal.LONG_TERM] }),
+    });
+    expect(passesBothWays(longTerm, alsoLongTerm)).toBe(true);
+  });
+
+  it('does not gate a user who has stated no goal preference', () => {
+    // Onboarding can be abandoned part way, and an account with no stated goals
+    // has not excluded anybody, so nothing blocks on the way out of it. Asserted
+    // in one direction on purpose: the other side still gates on its own list,
+    // which is what makes the gate mutual rather than a free pass.
+    const noPreference = makeUser({
+      id: 'user_a',
+      preferences: preferences({ relationshipGoals: [] }),
+    });
+    const casual = makeUser({
+      id: 'user_b',
+      relationshipGoal: RelationshipGoal.CASUAL,
+      preferences: preferences({ relationshipGoals: [RelationshipGoal.CASUAL] }),
+    });
+
+    expect(blockersFor(noPreference, casual)).not.toContain('goal');
+    expect(blockersFor(casual, noPreference)).toContain('goal');
   });
 
   it('does not gate on sexual orientation, which stays a scoring signal', () => {

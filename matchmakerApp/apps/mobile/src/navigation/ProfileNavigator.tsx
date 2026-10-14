@@ -1,15 +1,16 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { COLORS } from '@/constants';
-import { useAuthStore } from '@/stores/authStore';
 import { ProfileScreen } from '@/screens/main/ProfileScreen';
 import { EditProfileScreen } from '@/screens/profile/EditProfileScreen';
 import { PreferencesScreen } from '@/screens/profile/PreferencesScreen';
-import { MatchProfileScreen } from '@/screens/profile/MatchProfileScreen';
+import { TasteProfileScreen } from '@/screens/profile/TasteProfileScreen';
 import { SettingsScreen } from '@/screens/profile/SettingsScreen';
 import { VerificationScreen } from '@/screens/profile/VerificationScreen';
 import { ProfileDetailScreen } from '@/screens/profile/ProfileDetailScreen';
 import { AdminUsersScreen } from '@/screens/admin/AdminUsersScreen';
 import { AdminUserDetailScreen } from '@/screens/admin/AdminUserDetailScreen';
+import { AdminPostsScreen } from '@/screens/admin/AdminPostsScreen';
+import { AdminPostImportScreen } from '@/screens/admin/AdminPostImportScreen';
 import type { ProfileStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
@@ -41,9 +42,9 @@ export function ProfileNavigator() {
         options={{ title: 'Discovery preferences' }}
       />
       <Stack.Screen
-        name="MatchProfile"
-        component={ProfileMatchScreen}
-        options={{ title: 'Match profile' }}
+        name="TasteProfile"
+        component={TasteProfileScreen}
+        options={{ title: 'Your match profile' }}
       />
       <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
       <Stack.Screen
@@ -66,12 +67,16 @@ export function ProfileNavigator() {
         component={AdminUserDetailScreen}
         options={{ title: 'User record' }}
       />
+      <Stack.Screen
+        name="AdminPosts"
+        component={AdminPostsScreen}
+        options={{ title: 'Photo library' }}
+      />
+      <Stack.Screen
+        name="AdminPostImport"
+        component={AdminPostImportScreen}
+        options={{ title: 'Import photos' }}
+      />
     </Stack.Navigator>
   );
-}
-
-/** Reads the questionnaire off the signed-in user rather than fetching it. */
-function ProfileMatchScreen() {
-  const user = useAuthStore((store) => store.user);
-  return <MatchProfileScreen questionnaire={user?.questionnaire} />;
 }

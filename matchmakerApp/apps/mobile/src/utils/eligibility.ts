@@ -25,6 +25,7 @@ export type BlockerCode =
   | 'already_swiped'
   | 'age'
   | 'gender'
+  | 'goal'
   | 'distance'
   | 'missing_location'
   | 'their_requirements';
@@ -84,18 +85,15 @@ function distanceSatisfied(
 /**
  * Whether `target` satisfies everything `seeker` asked for.
  *
- * One-directional on purpose. The feed composes this both ways rather than
- * calling a single mutual helper, because it has to know *which* side rejected
- * whom in order to explain an empty deck, and collapsing the two directions
- * throws that away.
+ * One-directional on purpose. `mutualGate` below composes this both ways,
+ * because the caller has to know *which* side rejected whom in order to explain
+ * an empty deck, and collapsing the two directions throws that away.
  *
- * The gate the feed applies is deliberately narrower than "everything both
- * people said". Relationship goals and sexual orientation stay scoring-only
- * signals in `matching.ts`: both are the answer to "what are you open to", and
- * gating on them removes people whose only disagreement is a word they picked
- * from a list. Distance, age and gender answer a different question -- could
- * this work at all -- and a pair that fails any of them is not fixed by a good
- * score.
+ * The gate the feed applies answers one question: could this work at all. Age,
+ * gender, distance and relationship goals all fail a pair that a good score does
+ * not fix, so none of them is negotiable by how much taste two people happen to
+ * share. Sexual orientation stays a scoring signal rather than a gate, because
+ * it is not a requirement anybody gets to impose on a stranger.
  */
 export function checkEligibility(seeker: User, target: User): EligibilityResult {
   if (seeker.id === target.id) {
@@ -103,7 +101,7 @@ export function checkEligibility(seeker: User, target: User): EligibilityResult 
   }
 
   const failures: BlockerCode[] = [];
-  const { ageRange, genders, distanceMode, maxDistance } = seeker.preferences;
+  const { ageRange, genders, relationshipGoals, distanceMode, maxDistance } = seeker.preferences;
 
   const targetAge = ageFromDateOfBirth(target.dateOfBirth);
   if (targetAge < ageRange.min || targetAge > ageRange.max) failures.push('age');
@@ -120,6 +118,19 @@ export function checkEligibility(seeker: User, target: User): EligibilityResult 
     failures.push('gender');
   }
 
+  // Relationship goal was collected, validated, displayed and stored for three
+  // releases without ever being compared to anything. It is a preference now, and
+  // preferences are gates: a pair whose stated directions differ is not fixed by
+  // liking the same photos, so this refuses rather than scores.
+  //
+  // An empty list means "no stated preference", not "everyone is acceptable".
+  // Treating an unanswered question as a wildcard would let an account that never
+  // picked a goal into everybody's deck, which is the opposite of what picking one
+  // is for.
+  if (relationshipGoals.length > 0 && !relationshipGoals.includes(target.relationshipGoal)) {
+    failures.push('goal');
+  }
+
   const distance = distanceSatisfied(seeker.location, distanceMode, maxDistance, target.location);
 
   if (distance.missing) failures.push('missing_location');
@@ -127,6 +138,35 @@ export function checkEligibility(seeker: User, target: User): EligibilityResult 
 
   if (failures.length === 0) return { ...ELIGIBLE, distanceKm: distance.distanceKm };
   return { eligible: false, distanceKm: distance.distanceKm, failures };
+}
+
+/**
+ * Whether the two of them could be shown to each other at all.
+ *
+ * Both directions, with the reasons kept apart.
+ *
+ * This exists because the two sides of the product independently reimplemented
+ * "who can I see", and they drifted. The deck filtered its candidates and the
+ * taste summary did not, so the summary would name as "closest" people the deck
+ * would never show — the app promising a consequence it had already ruled out.
+ * One definition of the rule, called by both, is what stops that coming back.
+ *
+ * `blockedByYou` and `blockedByThem` are kept separate rather than merged into
+ * one list: they are different problems with different fixes, and the feed's
+ * empty state has to name the right one.
+ */
+export function mutualGate(
+  seeker: User,
+  target: User
+): { eligible: boolean; blockedByYou: BlockerCode[]; blockedByThem: BlockerCode[] } {
+  const yours = checkEligibility(seeker, target);
+  const theirs = checkEligibility(target, seeker);
+
+  return {
+    eligible: yours.eligible && theirs.eligible,
+    blockedByYou: yours.failures,
+    blockedByThem: theirs.failures,
+  };
 }
 
 /**
@@ -168,6 +208,7 @@ export function summariseBlockers(blockers: readonly BlockerCode[]): string {
     already_swiped: 'people you have already swiped on',
     age: 'your age range',
     gender: 'who you have chosen to see',
+    goal: 'the relationship goals you have chosen',
     distance: 'your distance limit',
     missing_location: 'people who have not set a location',
     their_requirements: 'people who have filtered you out',

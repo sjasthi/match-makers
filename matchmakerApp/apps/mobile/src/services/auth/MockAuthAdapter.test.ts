@@ -7,17 +7,9 @@ import { DEMO_EMAIL, DEMO_PASSWORD, ageFromDateOfBirth } from '@/utils/mockData'
 import { distanceKm } from '@/utils/distance';
 import {
   Gender,
-  ImportanceScale,
-  PromptTag,
-  PromptChoice,
-  PartnerValue,
-  emptyLifestyle,
-  questionnaireSchema,
   type Location,
   type User,
-  type UserQuestionnaire,
 } from '@match-makers/shared';
-import { isProfileComplete } from '@/services/profile';
 
 /** Where the demo account sits. Everything nearby is measured from here. */
 const AUSTIN: Location = {
@@ -33,6 +25,12 @@ async function othersApartFromDemo(): Promise<Array<User & { password: string }>
 
 async function seedAndSignIn(): Promise<MockAuthAdapter> {
   await mockDb.reset();
+  // The deck refuses to rank on nothing, so a viewer with no likes gets an
+  // empty deck by design. These tests are about eligibility and ordering, not
+  // about that gate, so the demo account gets one like to stand in for the
+  // taste a real person would have created by answering photos.
+  const posts = await mockDb.allPosts();
+  await mockDb.recordPostReaction('user_demo', posts[0]!.id, 'like');
   const adapter = new MockAuthAdapter();
   await adapter.login({ email: DEMO_EMAIL, password: DEMO_PASSWORD });
   return adapter;
@@ -74,46 +72,17 @@ describe('MockAuthAdapter', () => {
     expect(result.tokens?.accessToken).toMatch(/^mock\./);
   });
 
-  it('leaves a new account without a questionnaire so onboarding cannot be skipped', async () => {
-    await mockDb.reset();
-    const adapter = new MockAuthAdapter();
-
-    const result = await adapter.register({
-      email: 'no.questionnaire@example.com',
-      password: 'Str0ngPass',
-      name: 'No Questionnaire',
-      dateOfBirth: '1994-02-02',
-      gender: Gender.FEMALE,
-    });
-
-    expect(result.user.questionnaire).toBeUndefined();
-    expect(isProfileComplete(result.user)).toBe(false);
-  });
-
-  it('round-trips a questionnaire through updateProfile', async () => {
+  it('round-trips a profile edit through updateProfile', async () => {
     const adapter = await seedAndSignIn();
 
-    const questionnaire: UserQuestionnaire = {
-      values: [PartnerValue.KINDNESS, PartnerValue.AMBITION],
-      importance: {
-        [PartnerValue.KINDNESS]: ImportanceScale.NON_NEGOTIABLE,
-        [PartnerValue.AMBITION]: ImportanceScale.IMPORTANT,
-      },
-      dealBreakers: [PartnerValue.KINDNESS],
-      prompts: [
-        { promptId: 'family', tag: PromptTag.FAMILY, choice: PromptChoice.YES },
-        { promptId: 'kitchen', tag: PromptTag.FOOD, choice: PromptChoice.SOMETIMES },
-      ],
-      lifestyle: emptyLifestyle(),
-    };
+    const updated = await adapter.updateProfile({ bio: 'New bio', isVerified: true });
 
-    const updated = await adapter.updateProfile({ questionnaire });
-
-    expect(updated.questionnaire).toEqual(questionnaire);
-    expect(questionnaireSchema.safeParse(updated.questionnaire).success).toBe(true);
+    expect(updated.bio).toBe('New bio');
+    expect(updated.isVerified).toBe(true);
     // And it has to survive a fresh read, not just sit in the returned object.
     const reread = await adapter.getCurrentUser();
-    expect(reread?.questionnaire?.values).toEqual(questionnaire.values);
+    expect(reread?.bio).toBe('New bio');
+    expect(reread?.isVerified).toBe(true);
   });
 
   it('refuses a duplicate email', async () => {
@@ -149,14 +118,14 @@ describe('feed service (mock)', () => {
 
     const first = await fetchFeed(1, 5);
     expect(first.items.length).toBeGreaterThan(0);
-    expect(first.items.every((user) => user.id !== viewer?.id)).toBe(true);
+    expect(first.items.every((candidate) => candidate.user.id !== viewer?.id)).toBe(true);
 
     const target = first.items[0];
     expect(target).toBeDefined();
-    await sendSwipe(target!.id, 'pass');
+    await sendSwipe(target!.user.id, 'pass');
 
     const second = await fetchFeed(1, 5);
-    expect(second.items.map((user) => user.id)).not.toContain(target!.id);
+    expect(second.items.map((candidate) => candidate.user.id)).not.toContain(target!.user.id);
   });
 
   it('orders the feed by compatibility score', async () => {
@@ -164,8 +133,8 @@ describe('feed service (mock)', () => {
     const viewer = (await adapter.getCurrentUser())!;
 
     const page = await fetchFeed(1, 10);
-    const ages = page.items.map((user) => {
-      const dob = new Date(user.dateOfBirth);
+    const ages = page.items.map((candidate) => {
+      const dob = new Date(candidate.user.dateOfBirth);
       return new Date().getFullYear() - dob.getFullYear();
     });
 
@@ -185,7 +154,7 @@ describe('feed requirements (mock)', () => {
     const viewer = (await adapter.getCurrentUser())!;
     await adapter.updateProfile({ preferences: { ...viewer.preferences, ...preferences } });
     const page = await fetchFeed(1, 50);
-    return page.items.map((user) => user.id);
+    return page.items.map((candidate) => candidate.user.id);
   }
 
   it('shows nobody beyond the stated distance', async () => {
@@ -250,7 +219,7 @@ describe('feed requirements (mock)', () => {
     await adapter.updateProfile({ preferences: { ...viewer.preferences, distanceMode: 'global' } });
 
     const page = await fetchFeed(1, 50);
-    expect(page.items.map((user) => user.id)).not.toContain(picky.id);
+    expect(page.items.map((candidate) => candidate.user.id)).not.toContain(picky.id);
   });
 
   it('explains an empty deck instead of showing a blank screen', async () => {
@@ -279,14 +248,25 @@ describe('feed requirements (mock)', () => {
 
   it('blames already swiped rather than a setting when that is the cause', async () => {
     await seedAndSignIn();
+    const adapter = getAuthAdapter();
+    const viewer = (await adapter.getCurrentUser())!;
+
+    // Global first, so distance is not a co-cause. The seed is spread across the
+    // country and the demo starts on a 50km radius, so on `nearby` most people are
+    // out of range no matter how many are swiped. The blocked reason reports the
+    // plurality, so this test would pass for the wrong reason.
+    await adapter.updateProfile({
+      preferences: { ...viewer.preferences, distanceMode: 'global' },
+    });
+
     const first = await fetchFeed(1, 50);
     expect(first.items.length).toBeGreaterThan(0);
 
     // Recorded straight to storage rather than through sendSwipe: this is about
     // what the feed reports once everything has been seen, not about the swipe
     // service, and nineteen sequential round trips would time the test out.
-    for (const user of first.items) {
-      await mockDb.recordSwipe('user_demo', user.id, 'pass');
+    for (const candidate of first.items) {
+      await mockDb.recordSwipe('user_demo', candidate.user.id, 'pass');
     }
 
     const page = await fetchFeed(1, 50);
@@ -308,7 +288,7 @@ describe('matches service (mock)', () => {
     Math.random = () => 0.1;
     let outcome;
     try {
-      outcome = await sendSwipe(target.id, 'like');
+      outcome = await sendSwipe(target.user.id, 'like');
     } finally {
       Math.random = originalRandom;
     }
@@ -317,7 +297,7 @@ describe('matches service (mock)', () => {
     expect(outcome.matchId).toBeDefined();
 
     const matches = await fetchMatches();
-    expect(matches.some((match) => match.user.id === target.id)).toBe(true);
+    expect(matches.some((match) => match.user.id === target.user.id)).toBe(true);
 
     const sent = await sendMessage(outcome.matchId!, 'Hello there');
     expect(sent.isMine).toBe(true);
@@ -337,7 +317,7 @@ describe('matches service (mock)', () => {
     Math.random = () => 0.9;
     let outcome;
     try {
-      outcome = await sendSwipe(target.id, 'pass');
+      outcome = await sendSwipe(target.user.id, 'pass');
     } finally {
       Math.random = originalRandom;
     }

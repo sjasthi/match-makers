@@ -132,10 +132,10 @@ function UserRow({
           ) : (
             <Chip label="PROFILE INCOMPLETE" tone="warning" />
           )}
-          {summary.hasCompleteQuestionnaire ? (
-            <Chip label="FP3 OK" tone="success" />
+          {summary.answeredPhotos > 0 ? (
+            <Chip label={`${summary.answeredPhotos} PHOTOS`} tone="success" />
           ) : (
-            <Chip label="FP3 PARTIAL" tone="warning" />
+            <Chip label="NO TASTE YET" tone="warning" />
           )}
         </View>
       </View>

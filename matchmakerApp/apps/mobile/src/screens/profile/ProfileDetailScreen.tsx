@@ -12,12 +12,11 @@ import { distanceBetween } from '@/utils/eligibility';
 import { formatDistance } from '@/utils/distance';
 import {
   compatibilityLabel,
-  dealBreakerLabel,
   scoreCompatibility,
   MATCH_WEIGHTS,
+  type TasteSignal,
 } from '@/utils/matching';
 import { useAuthStore } from '@/stores/authStore';
-import { choiceLabel, promptQuestion, tagLabel } from '@/prompts';
 import { COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { ProfileStackParamList } from '@/navigation/types';
 
@@ -51,7 +50,7 @@ function describeDistanceTo(viewer: User, candidate: User): string {
 
 export function ProfileDetailScreen() {
   const route = useRoute<DetailRoute>();
-  const { userId, user: passedUser } = route.params;
+  const { userId, user: passedUser, taste } = route.params;
   const [user, setUser] = useState<User | null>(passedUser ?? null);
   const viewer = useAuthStore((store) => store.user);
 
@@ -137,8 +136,11 @@ export function ProfileDetailScreen() {
             </Text>
           </View>
 
-          {viewer && viewer.id !== user.id && user.questionnaire ? (
-            <MatchBreakdown viewer={viewer} candidate={user} />
+          {/* No questionnaire any more, so nothing gates this — any other profile
+              can be scored, and the breakdown says plainly when the taste signal
+              is still empty rather than hiding the screen. */}
+          {viewer && viewer.id !== user.id ? (
+            <MatchBreakdown viewer={viewer} candidate={user} taste={taste} />
           ) : null}
         </View>
       </ScrollView>
@@ -152,51 +154,28 @@ export function ProfileDetailScreen() {
  * A single number with no explanation is the thing users distrust most on a
  * dating app, so every signal is named and weighted out loud, including the
  * ones that scored nothing.
+ *
+ * `taste` arrives on the route from the deck, which is the only place that had
+ * the reactions table loaded. Without it the photo feed contributes nothing here
+ * and the row is simply absent, rather than claiming a score it did not read.
  */
-function MatchBreakdown({ viewer, candidate }: { viewer: User; candidate: User }) {
-  const result = scoreCompatibility(viewer, candidate);
+function MatchBreakdown({
+  viewer,
+  candidate,
+  taste,
+}: {
+  viewer: User;
+  candidate: User;
+  taste?: TasteSignal;
+}) {
+  const result = scoreCompatibility(viewer, candidate, taste);
 
   const rows: Array<{ label: string; value: string; earned: number; of: number }> = [
     {
-      label: 'Values you share',
-      value: `${Math.round(result.valueAlignment * 100)}%`,
-      earned: result.valueAlignment * MATCH_WEIGHTS.valueAlignment,
-      of: MATCH_WEIGHTS.valueAlignment,
-    },
-    {
-      label: 'Agree on',
-      value: result.agreements.length
-        ? result.agreements.map((agreement) => tagLabel(agreement.tag)).join(', ')
-        : 'Nothing in common',
-      earned: result.promptOverlap * MATCH_WEIGHTS.promptOverlap,
-      of: MATCH_WEIGHTS.promptOverlap,
-    },
-    ...(result.conflicts.length
-      ? [
-          {
-            // Naming the disagreement, with both answers, is the only version of
-            // this that is honest. It used to be folded into "prompts in common",
-            // which asserted agreement on questions the two of you had answered
-            // in opposite ways.
-            label: 'Differ on',
-            value: result.conflicts
-              .map(
-                (conflict) =>
-                  `${tagLabel(conflict.tag)} — you ${choiceLabel(
-                    conflict.myChoice
-                  ).toLowerCase()}, them ${choiceLabel(conflict.theirChoice).toLowerCase()}`
-              )
-              .join(', '),
-            earned: 0,
-            of: 0,
-          },
-        ]
-      : []),
-    {
-      label: 'Day to day',
-      value: `${Math.round(result.lifestyleCompatibility * 100)}% alike`,
-      earned: result.lifestyleCompatibility * MATCH_WEIGHTS.lifestyle,
-      of: MATCH_WEIGHTS.lifestyle,
+      label: 'Photos you both like',
+      value: result.reason ?? 'Nothing in common yet',
+      earned: result.tasteAffinity * MATCH_WEIGHTS.sharedTaste,
+      of: MATCH_WEIGHTS.sharedTaste,
     },
     {
       label: 'Relationship goal',
@@ -210,12 +189,6 @@ function MatchBreakdown({ viewer, candidate }: { viewer: User; candidate: User }
       earned: result.mutualOrientation ? MATCH_WEIGHTS.mutualOrientation : 0,
       of: MATCH_WEIGHTS.mutualOrientation,
     },
-    {
-      label: 'Age range',
-      value: result.withinRange ? 'In your range' : 'Outside your range',
-      earned: result.withinRange ? MATCH_WEIGHTS.ageFit : 0,
-      of: MATCH_WEIGHTS.ageFit,
-    },
   ];
 
   return (
@@ -224,12 +197,10 @@ function MatchBreakdown({ viewer, candidate }: { viewer: User; candidate: User }
         Your match
       </Text>
       <Text variant="headlineMedium" style={styles.score}>
-        {result.dealBreakerClash ? dealBreakerLabel() : `${result.score}%`}
+        {`${result.score}%`}
       </Text>
       <Text variant="bodySmall" style={styles.scoreCaption}>
-        {result.dealBreakerClash
-          ? 'One of you named something you cannot compromise on, and the other side does not have it.'
-          : compatibilityLabel(result.score)}
+        {compatibilityLabel(result.score)}
       </Text>
 
       {rows.map((row) => (
@@ -260,28 +231,6 @@ function MatchBreakdown({ viewer, candidate }: { viewer: User; candidate: User }
         </View>
       </View>
 
-      {candidate.questionnaire?.prompts?.length ? (
-        <View style={styles.promptList}>
-          <Text variant="titleSmall" style={styles.sectionTitle}>
-            In their words
-          </Text>
-          {candidate.questionnaire?.prompts?.map((answer) => (
-            <View key={answer.promptId} style={styles.promptRow}>
-              <Text variant="bodyMedium" style={styles.promptQuestion}>
-                {promptQuestion(answer.promptId, answer.tag)}
-              </Text>
-              <Text variant="bodyMedium" style={styles.promptChoice}>
-                {choiceLabel(answer.choice)}
-              </Text>
-              {answer.note ? (
-                <Text variant="bodySmall" style={styles.promptNote}>
-                  {answer.note}
-                </Text>
-              ) : null}
-            </View>
-          ))}
-        </View>
-      ) : null}
     </View>
   );
 }

@@ -166,9 +166,9 @@ export function ProfileScreen() {
             onPress={() => navigation?.navigate('Profile', { screen: 'Preferences' })}
           />
           <MenuRow
-            icon="clipboard-text-outline"
-            label="Match profile"
-            onPress={() => navigation?.navigate('Profile', { screen: 'MatchProfile' })}
+            icon="compass-outline"
+            label="Your match profile"
+            onPress={() => navigation?.navigate('Profile', { screen: 'TasteProfile' })}
           />
           <MenuRow
             icon="shield-check-outline"

@@ -1,20 +1,6 @@
 import { z } from 'zod';
-import {
-  Gender,
-  SexualOrientation,
-  RelationshipGoal,
-  PartnerValue,
-  PromptTag,
-  PromptChoice,
-  ScheduleType,
-  ExerciseLevel,
-  SmokingStatus,
-  DrinkingStatus,
-  PetsPreference,
-  ImportanceScale,
-} from '../types';
-
-export { MIN_IMPORTANCE, MAX_IMPORTANCE } from '../types';
+import { Gender, SexualOrientation, RelationshipGoal } from '../types';
+import { normaliseTag, TAG_MAX_LENGTH } from '../tags';
 
 export const emailSchema = z.string().email('Invalid email address');
 
@@ -107,67 +93,111 @@ export const photoSchema = z.object({
 });
 
 /* -------------------------------------------------------------------------- */
-/* Questionnaire (FP3)                                                         */
+/* Photo feed (FP4)                                                            */
 /* -------------------------------------------------------------------------- */
 
-export const MAX_VALUES = 5;
-/** Enough prompts for the score to mean something without burying the user. */
-export const MIN_PROMPTS = 2;
+/**
+ * A tag somebody typed.
+ *
+ * Normalises as it validates, so whatever passes through comes out canonical.
+ * That is the whole point of folding here rather than at the UI: the schema is
+ * the one gate every path to storage goes through, so a tag cannot reach the
+ * database un-folded even if a future caller forgets to normalise.
+ *
+ * The transform runs after the length check on the raw input, so the cap applies
+ * to what the admin actually typed rather than to the folded result. Both matter:
+ * a 30 character tag the fold shortens to 29 is still too long to put on a chip.
+ */
+export const postTagSchema = z
+  .string()
+  .trim()
+  .min(1, 'A tag cannot be empty')
+  .max(TAG_MAX_LENGTH, `Keep tags under ${TAG_MAX_LENGTH} characters`)
+  .transform((value) => normaliseTag(value))
+  // Folding can empty the string only if the input was whitespace, which the trim
+  // and min above already rejected, but a refactor could reintroduce that and a
+  // tag called nothing is worse than a rejected one.
+  .refine((value) => value.length > 0, 'A tag cannot be empty');
 
-export const partnerValueSchema = z.nativeEnum(PartnerValue);
-export const importanceSchema = z.nativeEnum(ImportanceScale);
+/**
+ * Folds, then de-duplicates, keeping the earliest occurrence.
+ *
+ * Folding is what makes de-duplication necessary: `Dogs` and `  dog ` are two
+ * different strings and one tag. Without this, both land in storage, and the
+ * taste index counts a reaction twice for a tag the person expressed once, which
+ * inflates their affinity with everybody else who likes that photo.
+ *
+ * Earliest wins rather than rejecting, because the first tag is the primary one
+ * and silently moving the primary would be worse than the duplicate. The input
+ * component already refuses duplicates, so this is the gate catching a caller
+ * that skipped it rather than something a person hits.
+ *
+ * A factory rather than one shared schema because the two callers want different
+ * "you have none" wording, and the count checks have to be applied to the raw
+ * list before the transform wraps it.
+ */
+function postTagListSchema(minMessage: string) {
+  return z
+    .array(postTagSchema)
+    .min(MIN_POST_TAGS, minMessage)
+    .max(MAX_POST_TAGS, `At most ${MAX_POST_TAGS} tags, so the primary one stays meaningful`)
+    .transform((tags) => {
+      const seen = new Set<string>();
+      const next: string[] = [];
+      for (const tag of tags) {
+        if (seen.has(tag)) continue;
+        seen.add(tag);
+        next.push(tag);
+      }
+      return next;
+    });
+}
 
-export const lifestyleSchema = z.object({
-  schedule: z.nativeEnum(ScheduleType),
-  exercise: z.nativeEnum(ExerciseLevel),
-  smoking: z.nativeEnum(SmokingStatus),
-  drinking: z.nativeEnum(DrinkingStatus),
-  pets: z.nativeEnum(PetsPreference),
+export const MIN_POST_TAGS = 1;
+/**
+ * Eight, up from three under the closed set of ten.
+ *
+ * The count is looser now that tags are free text and cost nothing to invent, but
+ * it is still capped: the first tag is the primary one that a co-like is
+ * credited to in the match reason, and a photo tagged fifteen ways has no
+ * subject. Eight also keeps the chips readable on a narrow phone card, which is
+ * where these are edited. The sentence that goes under a match percentage caps
+ * itself separately, at three.
+ */
+export const MAX_POST_TAGS = 8;
+
+export const postSchema = z.object({
+  id: z.string().min(1),
+  imageUri: z.string(),
+  // Optional, not defaulted to ''. A post written before the importer produced
+  // a second copy has none, and normalising that to an empty string would make
+  // "no thumbnail" indistinguishable from "a thumbnail that failed to load" and
+  // would stop the viewer falling back to the full image.
+  thumbUri: z.string().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  tags: postTagListSchema('Tag the photo so it can be matched on'),
+  createdAt: z.string(),
 });
 
-export const promptTagSchema = z.nativeEnum(PromptTag);
-export const promptChoiceSchema = z.nativeEnum(PromptChoice);
-
-export const promptAnswerSchema = z.object({
-  promptId: z.string().min(1),
-  tag: promptTagSchema,
-  choice: promptChoiceSchema,
-  note: z.string().max(280, 'Keep it under 280 characters').optional(),
+export const postReactionSchema = z.object({
+  id: z.string().min(1),
+  userId: z.string().min(1),
+  postId: z.string().min(1),
+  action: z.enum(['like', 'dislike']),
+  createdAt: z.string(),
 });
 
-export const questionnaireSchema = z
-  .object({
-    values: z.array(partnerValueSchema).min(1, 'Pick at least one value').max(MAX_VALUES),
-    importance: z.record(partnerValueSchema, importanceSchema),
-    dealBreakers: z.array(partnerValueSchema).max(MAX_VALUES),
-    prompts: z
-      .array(promptAnswerSchema)
-      .min(MIN_PROMPTS, 'Answer at least one prompt')
-      .max(Object.keys(PromptTag).length),
-    lifestyle: lifestyleSchema,
-  })
-  // A value you picked but never graded carries no weight, so the matching
-  // engine would have to guess at it. Reject instead of defaulting.
-  .refine((data) => data.values.every((value) => data.importance[value] !== undefined), {
-    message: 'Every value you picked needs an importance rating',
-    path: ['importance'],
-  })
-  // A deal breaker that is not in `values` contradicts the rest of the answer.
-  .refine((data) => data.dealBreakers.every((value) => data.values.includes(value)), {
-    message: 'A deal breaker has to be one of the values you picked',
-    path: ['dealBreakers'],
-  })
-  // Two answers to the same prompt would score as one tag but read as two
-  // different opinions on the other person's card.
-  .refine(
-    (data) => new Set(data.prompts.map((answer) => answer.tag)).size === data.prompts.length,
-    {
-      message: 'One answer per prompt',
-      path: ['prompts'],
-    }
-  );
+/** What the admin importer takes, before ids and timestamps are assigned. */
+export const postImportSchema = z.object({
+  imageUri: z.string().min(1, 'The image is missing'),
+  thumbUri: z.string().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  tags: postTagListSchema('Type a tag and press enter'),
+});
 
-/** The whole questionnaire as one validated object, for a backend setup call. */
+/** The whole account setup as one validated object, for a backend setup call. */
 export const profileSetupSchema = z.object({
   name: nameSchema,
   dateOfBirth: dateOfBirthSchema,
@@ -178,23 +208,13 @@ export const profileSetupSchema = z.object({
   photos: z.array(photoSchema).min(1, 'At least one photo is required').max(6, 'Maximum 6 photos'),
   location: locationSchema,
   preferences: preferencesSchema,
-  questionnaire: questionnaireSchema,
 });
+
+export type PostInput = z.infer<typeof postSchema>;
+export type PostImportInput = z.infer<typeof postImportSchema>;
+export type PostReactionInput = z.infer<typeof postReactionSchema>;
 
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type PreferencesInput = z.infer<typeof preferencesSchema>;
 export type ProfileSetupInput = z.infer<typeof profileSetupSchema>;
-export type LifestyleInput = z.infer<typeof lifestyleSchema>;
-export type QuestionnaireInput = z.infer<typeof questionnaireSchema>;
-
-/** An empty, valid set of lifecycle answers to seed a draft with. */
-export function emptyLifestyle(): z.infer<typeof lifestyleSchema> {
-  return {
-    schedule: ScheduleType.FLEXIBLE,
-    exercise: ExerciseLevel.LIGHT,
-    smoking: SmokingStatus.NEVER,
-    drinking: DrinkingStatus.SOCIALLY,
-    pets: PetsPreference.NO_PREFERENCE,
-  };
-}

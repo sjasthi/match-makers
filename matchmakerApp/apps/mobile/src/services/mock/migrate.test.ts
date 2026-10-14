@@ -2,26 +2,22 @@ import { MockDatabase } from './database';
 import {
   normaliseLocation,
   normalisePreferences,
-  normaliseQuestionnaire,
   normaliseStateUsers,
+  normaliseState,
 } from './migrate';
+import { MAX_POST_TAGS } from '@match-makers/shared';
 import { writeJson, persistentStore } from '@/services/storage/keyValueStore';
+import type { Post } from '@match-makers/shared';
 import { scoreCompatibility } from '@/utils/matching';
-import { checkEligibility } from '@/utils/eligibility';
 import { generateDemoUser, DEMO_EMAIL } from '@/utils/mockData';
-import {
-  Gender,
-  RelationshipGoal,
-  preferencesSchema,
-  partnerValueSchema,
-  lifestyleSchema,
-} from '@match-makers/shared';
+import { Gender, RelationshipGoal, preferencesSchema } from '@match-makers/shared';
 import type { User } from '@match-makers/shared';
 
 const DB_KEY = 'mock.db.v2';
 
 /** A questionnaire as it was stored before prompts existed. */
-const LEGACY_QUESTIONNAIRE = {
+/** An FP3-era questionnaire, still on disk but no longer read by anything. */
+const LEGACY = {
   values: ['kindness', 'emotional_openness'],
   importance: { kindness: 5, emotional_openness: 3 },
   dealBreakers: ['kindness'],
@@ -35,115 +31,6 @@ const LEGACY_QUESTIONNAIRE = {
     pets: 'love_pets',
   },
 };
-
-describe('normaliseQuestionnaire', () => {
-  it('fills in prompts for a record written before prompts existed', () => {
-    const result = normaliseQuestionnaire(LEGACY_QUESTIONNAIRE);
-
-    // The interest tags are dropped rather than turned into invented prompts.
-    expect(result.prompts).toEqual([]);
-    expect(result.values).toEqual(['kindness', 'emotional_openness']);
-    expect(result.importance).toEqual({ kindness: 5, emotional_openness: 3 });
-  });
-
-  it('drops kids from lifestyle, which moved to a prompt', () => {
-    const result = normaliseQuestionnaire(LEGACY_QUESTIONNAIRE);
-    expect(result.lifestyle).not.toHaveProperty('kids');
-    expect(lifestyleSchema.safeParse(result.lifestyle).success).toBe(true);
-  });
-
-  it('produces something the scoring code can read', () => {
-    const legacy = {
-      ...generateDemoUser(),
-      questionnaire: { ...LEGACY_QUESTIONNAIRE, prompts: undefined },
-    } as unknown as User;
-
-    const viewer = generateDemoUser() as User;
-    // This used to throw "Cannot read properties of undefined (reading
-    // 'map')", which is what a stale record did to the feed.
-    const result = scoreCompatibility(viewer, legacy);
-
-    expect(result.score).toBeGreaterThanOrEqual(0);
-    expect(result.score).toBeLessThanOrEqual(100);
-    expect(result.promptOverlap).toBe(0);
-    expect(result.agreements).toEqual([]);
-  });
-
-  it('repairs a deal breaker that is not one of the values', () => {
-    // An earlier build could store this, and the questionnaire schema rejects
-    // it, so it used to wedge the flow.
-    const result = normaliseQuestionnaire({
-      values: ['kindness'],
-      importance: { kindness: 4 },
-      dealBreakers: ['family'],
-      prompts: [],
-      lifestyle: {},
-    });
-
-    expect(result.dealBreakers).toEqual([]);
-  });
-
-  it('discards a grade for a value that was never picked', () => {
-    const result = normaliseQuestionnaire({
-      values: ['kindness'],
-      importance: { kindness: 4, family: 5 },
-      dealBreakers: [],
-      prompts: [],
-      lifestyle: {},
-    });
-
-    expect(result.importance).toEqual({ kindness: 4 });
-  });
-
-  it('keeps only prompt answers it understands', () => {
-    const result = normaliseQuestionnaire({
-      values: [],
-      importance: {},
-      dealBreakers: [],
-      prompts: [
-        { promptId: 'family', tag: 'family', choice: 'yes' },
-        { promptId: 'bad', tag: 'knitting', choice: 'yes' },
-        { promptId: 'bad2', tag: 'food', choice: 'maybe' },
-        { promptId: '', tag: 'food', choice: 'yes' },
-        'not an object',
-      ],
-      lifestyle: {},
-    });
-
-    expect(result.prompts).toEqual([{ promptId: 'family', tag: 'family', choice: 'yes' }]);
-  });
-
-  it('never keeps two answers to the same tag', () => {
-    const result = normaliseQuestionnaire({
-      values: [],
-      importance: {},
-      dealBreakers: [],
-      prompts: [
-        { promptId: 'a', tag: 'food', choice: 'yes' },
-        { promptId: 'b', tag: 'food', choice: 'no' },
-      ],
-      lifestyle: {},
-    });
-
-    expect(result.prompts).toHaveLength(1);
-  });
-
-  it('survives junk instead of throwing', () => {
-    for (const junk of [undefined, null, 'nope', 42, []]) {
-      const result = normaliseQuestionnaire(junk);
-      expect(partnerValueSchema).toBeDefined();
-      expect(result.values).toEqual([]);
-      expect(result.prompts).toEqual([]);
-      expect(result.importance).toEqual({});
-    }
-  });
-
-  it('leaves an already valid questionnaire untouched', () => {
-    const demo = generateDemoUser();
-    const result = normaliseQuestionnaire(demo.questionnaire);
-    expect(result).toEqual(demo.questionnaire);
-  });
-});
 
 describe('normalisePreferences', () => {
   it('reads a record with no distance mode as nearby', () => {
@@ -257,9 +144,11 @@ describe('normaliseStateUsers', () => {
     const alreadyFine = normaliseStateUsers([demo]);
     expect(alreadyFine.changed).toBe(false);
 
-    const repaired = normaliseStateUsers([
-      { ...demo, questionnaire: { ...LEGACY_QUESTIONNAIRE, prompts: undefined } },
-    ]);
+    // A record whose preferences predate `distanceMode` needs repairing; the
+    // leftover questionnaire on it does not, because nothing reads it.
+    const { distanceMode: _absent, ...preferences } = demo.preferences;
+    const repaired = normaliseStateUsers([{ ...demo, preferences }]);
+
     expect(repaired.changed).toBe(true);
   });
 
@@ -299,84 +188,306 @@ describe('normaliseStateUsers', () => {
 });
 
 describe('loading a stale database', () => {
-  it('upgrades stored records on load instead of crashing', async () => {
+  it('loads a record whose questionnaire nothing reads any more', async () => {
     const demo = generateDemoUser();
-    // Exactly what an older build would have left in storage: a questionnaire
-    // with interest tags, kids in lifestyle, and no prompts field at all.
+    // Exactly what an FP3 build left in storage. Nothing reads the key, but the
+    // record still has to load, or the app would strand every account that
+    // predates the photo feed.
     await writeJson(persistentStore, DB_KEY, {
-      users: [
-        {
-          ...demo,
-          email: DEMO_EMAIL,
-          password: demo.email,
-          questionnaire: { ...LEGACY_QUESTIONNAIRE, prompts: undefined },
-        },
-      ],
+      users: [{ ...demo, email: DEMO_EMAIL, password: demo.email, questionnaire: LEGACY }],
       currentUserId: null,
       swipes: [],
       matches: [],
       messages: [],
+      posts: [],
+      postReactions: [],
     });
 
-    // A fresh instance, because the shared singleton caches its state and
-    // reset() reseeds rather than reloading what is on disk.
     const state = await new MockDatabase().getState();
     const stored = state.users[0]!;
 
-    expect(stored.questionnaire?.prompts).toEqual([]);
-    expect(stored.questionnaire?.lifestyle).not.toHaveProperty('kids');
+    expect(stored.id).toBe(demo.id);
+    // Scoring reads the photo feed now, so a leftover questionnaire is inert
+    // rather than a crash.
     expect(() => scoreCompatibility(stored, demo)).not.toThrow();
   });
+});
 
-  it('persists the upgrade so the next launch does not repeat it', async () => {
-    const demo = generateDemoUser();
-    await writeJson(persistentStore, DB_KEY, {
-      users: [{ ...demo, email: DEMO_EMAIL, questionnaire: { ...LEGACY_QUESTIONNAIRE } }],
+describe('normaliseState (photo feed collections)', () => {
+  const demo = generateDemoUser();
+
+  function baseState(overrides: Record<string, unknown> = {}) {
+    return {
+      users: [demo],
       currentUserId: null,
       swipes: [],
       matches: [],
       messages: [],
-    });
+      ...overrides,
+    };
+  }
 
-    await new MockDatabase().getState();
+  const CAT_POST = { id: 'post_cat', imageUri: '', tags: ['pet'], createdAt: '2026-01-01' };
+  const MUSIC_POST = { id: 'post_music', imageUri: '', tags: ['music'], createdAt: '2026-01-02' };
 
-    // A second instance must see the migrated shape, not the stale one.
-    const reloaded = await new MockDatabase().getState();
-    expect(reloaded.users[0]?.questionnaire?.prompts).toEqual([]);
+  it('defaults the collections a pre-feed database never had', () => {
+    // The regression this guards: an account created before the photo feed was
+    // added has no `posts` or `postReactions` keys at all, and reading
+    // `.filter` off undefined would crash the landing page on first open.
+    const { state, changed } = normaliseState(baseState());
+
+    expect(changed).toBe(true);
+    expect((state as { posts: unknown[] }).posts).toEqual([]);
+    expect((state as { postReactions: unknown[] }).postReactions).toEqual([]);
   });
 
-  it('upgrades an account stored with no distance mode and no coordinates', async () => {
-    const demo = generateDemoUser();
-    const { distanceMode: _absent, ...preferences } = demo.preferences;
+  it('keeps the accounts rather than triggering a reseed', () => {
+    const { state } = normaliseState(baseState());
+    const users = (state as { users: User[] }).users;
 
-    // Exactly what a hand-typed city looked like before the catalog existed: a
-    // name, no coordinates, and no way to say whether the radius applied.
-    await writeJson(persistentStore, DB_KEY, {
-      users: [
-        {
-          ...demo,
-          email: DEMO_EMAIL,
-          preferences,
-          location: { latitude: 0, longitude: 0, city: 'Rotterdam', country: 'Netherlands' },
-        },
-      ],
-      currentUserId: null,
-      swipes: [],
-      matches: [],
-      messages: [],
+    // Reseeding is what throws away every swipe and message somebody has, so
+    // adding an append-only collection must never reach it.
+    expect(users).toHaveLength(1);
+    expect(users[0]?.email).toBe(DEMO_EMAIL);
+  });
+
+  it('keeps well-formed posts and reactions', () => {
+    const { state } = normaliseState(
+      baseState({
+        posts: [CAT_POST, MUSIC_POST],
+        postReactions: [
+          { id: 'r1', userId: 'user_demo', postId: 'post_cat', action: 'like', createdAt: '2026-01-03' },
+        ],
+      })
+    );
+
+    const next = state as { posts: unknown[]; postReactions: unknown[] };
+    expect(next.posts).toHaveLength(2);
+    expect(next.postReactions).toHaveLength(1);
+  });
+
+  it('drops a post with no usable tags rather than surfacing it in the feed', () => {
+    // An untagged post can neither be rendered nor scored on, so keeping it
+    // would push the failure into the feed where it looks like broken matching.
+    const { state } = normaliseState(
+      baseState({
+        posts: [CAT_POST, { id: 'post_untagged', imageUri: '', tags: [], createdAt: '2026-01-01' }],
+        postReactions: [],
+      })
+    );
+
+    expect((state as { posts: Array<{ id: string }> }).posts.map((post) => post.id)).toEqual([
+      'post_cat',
+    ]);
+  });
+
+  it('keeps a tag the build has never seen before', () => {
+    // Tags are free text now, so "the current build does not know this word" is
+    // the normal case rather than a corrupt record. Under the closed set this
+    // test asserted the opposite: an unknown tag was filtered out.
+    const { state } = normaliseState(
+      baseState({
+        posts: [
+          { id: 'post_new', imageUri: '', tags: ['underwater baking'], createdAt: '2026-01-01' },
+        ],
+        postReactions: [],
+      })
+    );
+
+    expect((state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags).toEqual([
+      'underwater baking',
+    ]);
+  });
+
+  it('folds a tag written with odd casing or spacing', () => {
+    // The repair that matters for matching: a record holding `Dogs` next to one
+    // holding `dog` would split a pair the admin believes is joined up. Folding
+    // on load means an older or hand-written record cannot reintroduce that split.
+    const { state } = normaliseState(
+      baseState({
+        posts: [
+          { id: 'post_a', imageUri: '', tags: ['Dogs', '  HOT   DOG '], createdAt: '2026-01-01' },
+        ],
+        postReactions: [],
+      })
+    );
+
+    expect((state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags).toEqual([
+      'dog',
+      'hot dog',
+    ]);
+  });
+
+  it('keeps the earliest of two tags that fold to the same thing', () => {
+    // Order is meaningful: the first tag is the primary one a co-like is credited
+    // to, so de-duplicating has to keep the earlier occurrence or a post tagged
+    // `dog, cat, dog` would silently change subject.
+    const { state } = normaliseState(
+      baseState({
+        posts: [
+          { id: 'post_a', imageUri: '', tags: ['dog', 'cat', 'dogs'], createdAt: '2026-01-01' },
+        ],
+        postReactions: [],
+      })
+    );
+
+    expect((state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags).toEqual([
+      'dog',
+      'cat',
+    ]);
+  });
+
+  it('caps a tag list that outgrew the limit', () => {
+    const { state } = normaliseState(
+      baseState({
+        posts: [
+          {
+            id: 'post_a',
+            imageUri: '',
+            tags: Array.from({ length: 20 }, (_, index) => `tag${index}`),
+            createdAt: '2026-01-01',
+          },
+        ],
+        postReactions: [],
+      })
+    );
+
+    expect(
+      (state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags
+    ).toHaveLength(MAX_POST_TAGS);
+  });
+
+  it('drops a reaction pointing at a post that is gone', () => {
+    // A dangling reaction would keep weighting somebody's taste on a tag they
+    // can no longer see the subject of.
+    const { state } = normaliseState(
+      baseState({
+        posts: [CAT_POST],
+        postReactions: [
+          { id: 'r1', userId: 'user_demo', postId: 'post_cat', action: 'like', createdAt: '2026-01-03' },
+          { id: 'r2', userId: 'user_demo', postId: 'post_deleted', action: 'like', createdAt: '2026-01-03' },
+        ],
+      })
+    );
+
+    const reactions = (state as { postReactions: Array<{ id: string }> }).postReactions;
+    expect(reactions.map((reaction) => reaction.id)).toEqual(['r1']);
+  });
+
+  it('drops a reaction with an unrecognised action', () => {
+    const { state } = normaliseState(
+      baseState({
+        posts: [CAT_POST],
+        postReactions: [
+          { id: 'r1', userId: 'user_demo', postId: 'post_cat', action: 'love', createdAt: '2026-01-03' },
+        ],
+      })
+    );
+
+    expect((state as { postReactions: unknown[] }).postReactions).toEqual([]);
+  });
+
+  it('leaves a healthy state alone', () => {
+    const { changed } = normaliseState(
+      baseState({ posts: [CAT_POST], postReactions: [] })
+    );
+    expect(changed).toBe(false);
+  });
+});
+
+describe('a post stored before the importer wrote two copies', () => {
+  const demo = generateDemoUser();
+
+  function postsThrough(input: Array<Record<string, unknown>>) {
+    const { state } = normaliseState({
+      users: [demo],
+      posts: input,
+      postReactions: [],
+    });
+    return (state as { posts: Post[] }).posts;
+  }
+
+  it('keeps a single-uri post exactly as it was', () => {
+    const posts = postsThrough([
+      { id: 'post_old', imageUri: 'file:///cache/1200.jpg', tags: ['dog'], createdAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+
+    // No thumb is derived here. Rewriting every stored photo on load is exactly
+    // what this function exists to avoid, and the grid already falls back.
+    expect(posts[0]).toEqual({
+      id: 'post_old',
+      imageUri: 'file:///cache/1200.jpg',
+      tags: ['dog'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(posts[0]?.thumbUri).toBeUndefined();
+  });
+
+  it('carries the second copy and dimensions through when they are there', () => {
+    const posts = postsThrough([
+      {
+        id: 'post_new',
+        imageUri: 'file:///cache/1200.jpg',
+        thumbUri: 'file:///cache/640.jpg',
+        width: 1200,
+        height: 900,
+        tags: ['dog'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+
+    expect(posts[0]?.thumbUri).toBe('file:///cache/640.jpg');
+    expect(posts[0]?.width).toBe(1200);
+    expect(posts[0]?.height).toBe(900);
+  });
+
+  it('drops a nonsensical dimension rather than storing it', () => {
+    // The viewer sizes its card from these. A zero or negative would collapse the
+    // layout instead of falling back the way an absent value does.
+    const posts = postsThrough([
+      {
+        id: 'post_bad',
+        imageUri: 'file:///cache/1200.jpg',
+        width: 0,
+        height: -5,
+        tags: ['dog'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+
+    expect(posts[0]?.width).toBeUndefined();
+    expect(posts[0]?.height).toBeUndefined();
+  });
+
+  it('treats an empty thumb as no thumb at all', () => {
+    // An empty string would send the grid to a file that does not exist, which
+    // is worse than falling back to the full image.
+    const posts = postsThrough([
+      { id: 'post_empty', imageUri: 'file:///cache/1200.jpg', thumbUri: '', tags: ['dog'], createdAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+
+    expect(posts[0]?.thumbUri).toBeUndefined();
+  });
+});
+
+describe('a record written before the photo feed', () => {
+  const demo = generateDemoUser();
+
+  it('keeps an unknown questionnaire key without failing', () => {
+    // Records written under FP3 carry a `questionnaire` that nothing reads any
+    // more. Tolerating an unknown key is free; a migration that deletes or
+    // rewrites it can fail on data nobody looks at.
+    const legacy = { ...demo, questionnaire: { values: ['kindness'], prompts: [] } };
+    const { state, changed } = normaliseState({
+      users: [legacy],
+      posts: [],
+      postReactions: [],
     });
 
-    const stored = (await new MockDatabase().getState()).users[0]!;
-
-    expect(stored.preferences.distanceMode).toBe('nearby');
-    expect(stored.location.latitude).not.toBe(0);
-
-    // The point of the repair: the account is now reachable by the feed.
-    const nearby = {
-      ...generateDemoUser(),
-      id: 'user_nearby',
-      location: stored.location,
-    } as User;
-    expect(checkEligibility(nearby, stored).eligible).toBe(true);
+    const stored = (state as { users: Array<Record<string, unknown>> }).users[0]!;
+    expect(stored.id).toBe(demo.id);
+    expect(stored.questionnaire).toEqual({ values: ['kindness'], prompts: [] });
+    // Nothing about the record needed repairing, so nothing was rewritten.
+    expect(changed).toBe(false);
   });
 });

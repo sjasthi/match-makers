@@ -1,27 +1,12 @@
 import {
   loginSchema,
   passwordSchema,
-  registerSchema,
+  postImportSchema,
+  postSchema,
   preferencesSchema,
-  questionnaireSchema,
-  lifestyleSchema,
-  emptyLifestyle,
-  MAX_IMPORTANCE,
-  MAX_VALUES,
-  MIN_PROMPTS,
+  registerSchema,
 } from './schemas';
-import {
-  Gender,
-  RelationshipGoal,
-  PartnerValue,
-  PromptTag,
-  PromptChoice,
-  ScheduleType,
-  ExerciseLevel,
-  SmokingStatus,
-  DrinkingStatus,
-  PetsPreference,
-} from '../types';
+import { Gender, RelationshipGoal } from '../types';
 
 describe('loginSchema', () => {
   it('accepts a well formed payload', () => {
@@ -135,123 +120,56 @@ describe('preferencesSchema', () => {
   });
 });
 
-describe('lifestyleSchema', () => {
+describe('postSchema', () => {
   const base = {
-    schedule: ScheduleType.EARLY_BIRD,
-    exercise: ExerciseLevel.MODERATE,
-    smoking: SmokingStatus.NEVER,
-    drinking: DrinkingStatus.SOCIALLY,
-    pets: PetsPreference.LOVE_PETS,
+    id: 'post_1',
+    imageUri: 'file:///cache/1200.jpg',
+    tags: ['dog'],
+    createdAt: '2026-01-01T00:00:00.000Z',
   };
 
-  it('accepts a full set of answers', () => {
-    expect(lifestyleSchema.safeParse(base).success).toBe(true);
+  it('accepts a post written before the second copy existed', () => {
+    // Every post in storage predates thumbUri, so this shape has to keep
+    // validating or the migration would reject the whole library at once.
+    expect(postSchema.safeParse(base).success).toBe(true);
   });
 
-  it('rejects a missing question', () => {
-    const { pets: _pets, ...withoutPets } = base;
-    expect(lifestyleSchema.safeParse(withoutPets).success).toBe(false);
+  it('accepts both copies and the dimensions of the full one', () => {
+    const result = postSchema.safeParse({
+      ...base,
+      thumbUri: 'file:///cache/640.jpg',
+      width: 1200,
+      height: 900,
+    });
+    expect(result.success).toBe(true);
   });
 
-  it('produces a valid draft from emptyLifestyle', () => {
-    expect(lifestyleSchema.safeParse(emptyLifestyle()).success).toBe(true);
+  it.each([
+    ['zero width', { width: 0 }],
+    ['a negative height', { height: -10 }],
+    ['a fractional width', { width: 120.5 }],
+  ])('rejects %s', (_label, fields) => {
+    // A nonsensical dimension is worse than an absent one: the viewer uses these
+    // to size its card, so a zero would collapse the layout rather than fall back.
+    expect(postSchema.safeParse({ ...base, ...fields }).success).toBe(false);
   });
 });
 
-describe('questionnaireSchema', () => {
-  const base = {
-    values: [PartnerValue.KINDNESS, PartnerValue.SENSE_OF_HUMOUR],
-    importance: { [PartnerValue.KINDNESS]: 5, [PartnerValue.SENSE_OF_HUMOUR]: 3 },
-    dealBreakers: [PartnerValue.KINDNESS],
-    prompts: [
-      { promptId: 'family', tag: PromptTag.FAMILY, choice: PromptChoice.YES },
-      { promptId: 'leisure', tag: PromptTag.LEISURE, choice: PromptChoice.SOMETIMES },
-    ],
-    lifestyle: emptyLifestyle(),
-  };
-
-  it('accepts a complete answer set', () => {
-    expect(questionnaireSchema.safeParse(base).success).toBe(true);
-  });
-
-  it('requires at least one value', () => {
-    expect(questionnaireSchema.safeParse({ ...base, values: [] }).success).toBe(false);
-  });
-
-  it('requires enough prompts for the score to mean something', () => {
-    expect(questionnaireSchema.safeParse({ ...base, prompts: [] }).success).toBe(false);
-    const tooFew = base.prompts.slice(0, MIN_PROMPTS - 1);
-    expect(questionnaireSchema.safeParse({ ...base, prompts: tooFew }).success).toBe(false);
-  });
-
-  it('rejects a prompt tag it does not know, so a typo cannot reach the engine', () => {
-    const result = questionnaireSchema.safeParse({
-      ...base,
-      prompts: [{ promptId: 'x', tag: 'knitting', choice: PromptChoice.YES }],
-    });
+describe('postImportSchema', () => {
+  it('still requires the full image', () => {
+    // A thumbnail on its own cannot be shown full screen, so it is never enough.
+    const result = postImportSchema.safeParse({ thumbUri: 'file:///cache/640.jpg', tags: ['dog'] });
     expect(result.success).toBe(false);
   });
 
-  it('rejects two answers to the same prompt', () => {
-    const result = questionnaireSchema.safeParse({
-      ...base,
-      prompts: [
-        { promptId: 'family', tag: PromptTag.FAMILY, choice: PromptChoice.YES },
-        { promptId: 'family-again', tag: PromptTag.FAMILY, choice: PromptChoice.NO },
-      ],
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.path).toEqual(['prompts']);
-    }
-  });
-
-  it('keeps a free text note unscored but stored', () => {
-    const result = questionnaireSchema.safeParse({
-      ...base,
-      prompts: [{ ...base.prompts[0], note: 'Two cats, no dogs.' }, base.prompts[1]],
+  it('accepts an import carrying both copies', () => {
+    const result = postImportSchema.safeParse({
+      imageUri: 'file:///cache/1200.jpg',
+      thumbUri: 'file:///cache/640.jpg',
+      width: 1200,
+      height: 900,
+      tags: ['dog'],
     });
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.prompts[0]?.note).toBe('Two cats, no dogs.');
-    }
-  });
-
-  it('caps how many values can be picked', () => {
-    const values = Object.values(PartnerValue).slice(0, MAX_VALUES + 1);
-    const importance = Object.fromEntries(values.map((value) => [value, 3]));
-    const result = questionnaireSchema.safeParse({ ...base, values, importance, dealBreakers: [] });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects a value that was never given an importance rating', () => {
-    const result = questionnaireSchema.safeParse({
-      ...base,
-      importance: { [PartnerValue.KINDNESS]: 5 },
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.path).toEqual(['importance']);
-    }
-  });
-
-  it('rejects an importance outside the 1 to 5 scale', () => {
-    const tooHigh = MAX_IMPORTANCE + 1;
-    const result = questionnaireSchema.safeParse({
-      ...base,
-      importance: { ...base.importance, [PartnerValue.KINDNESS]: tooHigh },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects a deal breaker that is not one of the chosen values', () => {
-    const result = questionnaireSchema.safeParse({
-      ...base,
-      dealBreakers: [PartnerValue.AMBITION],
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.path).toEqual(['dealBreakers']);
-    }
   });
 });

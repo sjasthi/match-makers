@@ -1,27 +1,13 @@
 import type {
   User,
   UserPreferences,
-  UserQuestionnaire,
-  ValueImportance,
   Photo,
   Location,
+  Post,
+  PostReaction,
+  PostReactionAction,
 } from '@match-makers/shared';
-import {
-  Gender,
-  RelationshipGoal,
-  SexualOrientation,
-  PartnerValue,
-  ScheduleType,
-  ExerciseLevel,
-  SmokingStatus,
-  DrinkingStatus,
-  PetsPreference,
-  PromptTag,
-  PromptChoice,
-  type PromptAnswer,
-} from '@match-makers/shared';
-import { MAX_IMPORTANCE, MIN_PROMPTS } from '@match-makers/shared';
-import { PROMPTS, type TaggedPrompt } from '@/prompts';
+import { Gender, RelationshipGoal, SexualOrientation } from '@match-makers/shared';
 import { APP_CONFIG } from '@/constants';
 import { findCityCentroid } from '@/utils/cityCatalog';
 import { destinationPoint } from '@/utils/distance';
@@ -293,189 +279,9 @@ function defaultPreferences(): UserPreferences {
       RelationshipGoal.SHORT_TERM,
       RelationshipGoal.CASUAL,
       RelationshipGoal.FRIENDSHIP,
+      RelationshipGoal.NOT_SURE,
     ],
   };
-}
-
-/** Picks `count` distinct entries, deterministic for a given PRNG state. */
-function pickMany<T>(random: () => number, list: readonly T[], count: number): T[] {
-  const remaining = [...list];
-  const chosen: T[] = [];
-  const take = Math.min(count, remaining.length);
-  for (let index = 0; index < take; index += 1) {
-    const [picked] = remaining.splice(Math.floor(random() * remaining.length), 1);
-    if (picked !== undefined) chosen.push(picked);
-  }
-  return chosen;
-}
-
-const ALL_VALUES = Object.values(PartnerValue);
-const ALL_PROMPT_TAGS = Object.values(PromptTag);
-const ALL_PROMPT_CHOICES = Object.values(PromptChoice);
-const ALL_SCHEDULES = Object.values(ScheduleType);
-const ALL_EXERCISE = Object.values(ExerciseLevel);
-const ALL_SMOKING = Object.values(SmokingStatus);
-const ALL_DRINKING = Object.values(DrinkingStatus);
-const ALL_PETS = Object.values(PetsPreference);
-
-/** Draws 2-4 values, including the well-liked ones at their weighted rate. */
-function weightedValues(random: () => number): PartnerValue[] {
-  const chosen: PartnerValue[] = [];
-  for (const value of ALL_VALUES) {
-    if (random() < (VALUE_WEIGHTS[value] ?? 0.2)) chosen.push(value);
-  }
-
-  const target = 2 + Math.floor(random() * 3);
-  if (chosen.length < target) {
-    chosen.push(
-      ...pickMany(
-        random,
-        ALL_VALUES.filter((v) => !chosen.includes(v)),
-        target - chosen.length
-      )
-    );
-  }
-  return chosen.slice(0, target);
-}
-
-/**
- * Answers a random subset of the prompts.
- *
- * Every candidate answers at least MIN_PROMPTS so the overlap signal is real,
- * and drawn from the same stream as the rest of the profile so a reseed
- * reshuffles prompt answers along with everything else.
- */
-function buildPromptAnswers(random: () => number): PromptAnswer[] {
-  const tags = pickMany(random, ALL_PROMPT_TAGS, MIN_PROMPTS + Math.floor(random() * 4));
-  return (
-    tags
-      // The id has to be a real prompt id, otherwise every surface that renders
-      // an answer has to fall back to showing a bare tag.
-      .map((tag) => PROMPTS.find((prompt) => prompt.tag === tag))
-      .filter((definition): definition is TaggedPrompt => definition !== undefined)
-      .map((definition) => ({
-        promptId: definition.id,
-        tag: definition.tag,
-        choice: pick(random, ALL_PROMPT_CHOICES),
-      }))
-  );
-}
-
-/**
- * Builds the questionnaire answers the FP3 onboarding collects.
- *
- * Candidates need these so the matching engine has something to compare when
- * it is built; without them every seeded profile is identical on the fields
- * that will eventually drive the score. Grades are assigned from the same
- * random stream as the rest of the user, so a reseed reshuffles the data
- * exactly like it reshuffles the rest of the profile.
- */
-/**
- * Shares of seeded candidates that pick each value.
- *
- * Uniform sampling from the eight values made almost nobody agree on
- * anything, which is not what the value of a trait looks like in practice:
- * kindness is the most commonly wanted trait by a wide margin, and the more
- * idiosyncratic ones are rare. Weighting it this way keeps the demo deck
- * legible (a real spread, not everyone scoring the same) and stops a single
- * non-negotiable value from vetoing most of the deck.
- */
-const VALUE_WEIGHTS: Record<PartnerValue, number> = {
-  [PartnerValue.KINDNESS]: 0.7,
-  [PartnerValue.EMOTIONAL_OPENNESS]: 0.5,
-  [PartnerValue.SENSE_OF_HUMOUR]: 0.45,
-  [PartnerValue.SHARED_INTERESTS]: 0.35,
-  [PartnerValue.FAMILY]: 0.25,
-  [PartnerValue.AMBITION]: 0.25,
-  [PartnerValue.INDEPENDENCE]: 0.2,
-  [PartnerValue.PHYSICAL_CLOSENESS]: 0.2,
-};
-
-function buildQuestionnaire(random: () => number): UserQuestionnaire {
-  const values = weightedValues(random);
-  const importance: ValueImportance = {};
-  for (const value of values) {
-    importance[value] = (1 +
-      Math.floor(random() * MAX_IMPORTANCE)) as ValueImportance[PartnerValue];
-  }
-
-  // Deal breakers are rare, and when one exists it is the highest graded
-  // value, otherwise the pair would contradict the rest of the answer.
-  const dealBreakers =
-    random() > 0.8
-      ? values.filter((value) => importance[value] === MAX_IMPORTANCE).slice(0, 1)
-      : [];
-
-  return {
-    values,
-    importance,
-    dealBreakers,
-    prompts: buildPromptAnswers(random),
-    lifestyle: {
-      schedule: pick(random, ALL_SCHEDULES),
-      exercise: pick(random, ALL_EXERCISE),
-      smoking: pick(random, ALL_SMOKING),
-      drinking: pick(random, ALL_DRINKING),
-      pets: pick(random, ALL_PETS),
-    },
-  };
-}
-
-/**
- * The demo account's questionnaire, fixed rather than random.
- *
- * It has to be complete because `isProfileComplete` now requires a
- * questionnaire, and RootNavigator only offers the feed once the profile is
- * complete. If this were left blank the demo shortcut would dead-end in
- * onboarding, which is the opposite of what a demo account is for.
- */
-function demoQuestionnaire(): UserQuestionnaire {
-  const values: PartnerValue[] = [
-    PartnerValue.KINDNESS,
-    PartnerValue.SENSE_OF_HUMOUR,
-    PartnerValue.EMOTIONAL_OPENNESS,
-    PartnerValue.SHARED_INTERESTS,
-  ];
-  return {
-    values,
-    importance: {
-      [PartnerValue.KINDNESS]: 5,
-      [PartnerValue.SENSE_OF_HUMOUR]: 4,
-      [PartnerValue.EMOTIONAL_OPENNESS]: 5,
-      [PartnerValue.SHARED_INTERESTS]: 3,
-    },
-    // Deliberately no deal breaker. The veto pins a score to 24, and since
-    // roughly a third of seeded candidates lack any given value, one on the
-    // demo account turns most of the visible deck into the same 24%. The demo
-    // exists to show a working spread; the veto is exercised by the tests and
-    // by anyone who declares one during onboarding.
-    dealBreakers: [],
-    prompts: [
-      { promptId: 'family', tag: PromptTag.FAMILY, choice: PromptChoice.SOMETIMES },
-      { promptId: 'outdoors', tag: PromptTag.LEISURE, choice: PromptChoice.YES },
-      { promptId: 'kitchen', tag: PromptTag.FOOD, choice: PromptChoice.YES },
-      { promptId: 'playlist', tag: PromptTag.MUSIC, choice: PromptChoice.YES },
-      { promptId: 'slow', tag: PromptTag.RECOVERY, choice: PromptChoice.NO },
-    ],
-    lifestyle: {
-      schedule: ScheduleType.FLEXIBLE,
-      exercise: ExerciseLevel.MODERATE,
-      smoking: SmokingStatus.NEVER,
-      drinking: DrinkingStatus.SOCIALLY,
-      pets: PetsPreference.LOVE_PETS,
-    },
-  };
-}
-
-export function ageFromDateOfBirth(dateOfBirth: string): number {
-  const dob = new Date(dateOfBirth);
-  const now = new Date();
-  let age = now.getFullYear() - dob.getFullYear();
-  const monthDelta = now.getMonth() - dob.getMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < dob.getDate())) {
-    age -= 1;
-  }
-  return age;
 }
 
 export function generateMockUser(index: number, seed = 42): User & { password: string } {
@@ -515,7 +321,6 @@ export function generateMockUser(index: number, seed = 42): User & { password: s
     photos: buildPhotos(String(index)),
     location: seedLocation(random, seedTier(random)),
     preferences: defaultPreferences(),
-    questionnaire: buildQuestionnaire(random),
     isVerified: random() > 0.35,
     createdAt,
     updatedAt: createdAt,
@@ -524,6 +329,164 @@ export function generateMockUser(index: number, seed = 42): User & { password: s
 
 export function generateMockUsers(count: number, seed = 42): Array<User & { password: string }> {
   return Array.from({ length: count }, (_, index) => generateMockUser(index + 1, seed));
+}
+
+export function ageFromDateOfBirth(dateOfBirth: string): number {
+  const dob = new Date(dateOfBirth);
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const monthDelta = now.getMonth() - dob.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < dob.getDate())) {
+    age -= 1;
+  }
+  return age;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Photo feed seed (FP4)                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Weighted so the seed library has a recognisable shape.
+ *
+ * The feed is a taste signal, and the interest it reads is only interesting if
+ * the population disagrees about some things and agrees about others. Uniform
+ * tags would make every pair overlap by chance and the affinity score would sit
+ * in a narrow band for everyone. `animal` is the heaviest because it is the
+ * clearest case of the feature working: two strangers liking two different animal
+ * photos have still found each other.
+ *
+ * These are ordinary words, not enum members, because tags are free text now.
+ * They are written in the canonical form `normaliseTag` produces, so a seed tag
+ * and a typed one compare equal without any of this needing to be folded again:
+ * `pets` and `animals` would become `pet` and `animal`, which is what makes
+ * `animals` and `animal` interchangeable everywhere.
+ *
+ * Nothing stops an admin typing `hiking` or `baking` or `sourdough`, and the
+ * import screen suggests whatever is already here so the vocabulary converges
+ * rather than fracturing.
+ */
+const TAG_WEIGHTS: Array<{ tag: string; weight: number }> = [
+  { tag: 'animal', weight: 0.2 },
+  { tag: 'pet', weight: 0.16 },
+  { tag: 'outdoor', weight: 0.15 },
+  { tag: 'food', weight: 0.14 },
+  { tag: 'travel', weight: 0.12 },
+  { tag: 'music', weight: 0.09 },
+  { tag: 'art', weight: 0.06 },
+  { tag: 'home', weight: 0.04 },
+  { tag: 'fitness', weight: 0.03 },
+  { tag: 'nightlife', weight: 0.01 },
+];
+
+const POST_SEED = 7;
+
+/** Picks one tag from the weighted table. */
+function weightedTag(random: () => number): string {
+  const roll = random();
+  let cumulative = 0;
+  for (const entry of TAG_WEIGHTS) {
+    cumulative += entry.weight;
+    if (roll < cumulative) return entry.tag;
+  }
+  // The weights sum to 1, so this is only reachable by floating point drift.
+  return 'animal';
+}
+
+/**
+ * The site-owned photo library on a fresh install.
+ *
+ * Every `imageUri` is empty, exactly like a seeded profile's photo. That is
+ * deliberate and it is not a placeholder for something unfinished: the prototype
+ * ships no photographs, so the feed renders a generated tile keyed to the
+ * primary tag. An admin import replaces those tiles with real images, which is
+ * how the library is meant to be filled.
+ */
+export function generateSeedPosts(count: number, seed = POST_SEED): Post[] {
+  const random = createRandom(seed);
+  // Fixed timestamp rather than `now`, so a reseed does not make every seeded
+  // post look newly added.
+  const createdAt = '2026-01-01T00:00:00.000Z';
+
+  return Array.from({ length: count }, (_, index) => {
+    const primary = weightedTag(random);
+
+    // A secondary tag is only ever added when it is not the primary one, and
+    // never with more than one, so the "first tag is primary" rule in `Post`
+    // holds and a second tag stays a genuine hint rather than a co-equal claim.
+    const others = TAG_WEIGHTS.map((entry) => entry.tag).filter((tag) => tag !== primary);
+    const secondary = random() > 0.72 ? pick(random, others) : null;
+
+    return {
+      id: createId('post', index + 1),
+      imageUri: '',
+      tags: secondary ? [primary, secondary] : [primary],
+      createdAt,
+    };
+  });
+}
+
+/**
+ * Seeded reactions, so the taste signal has somebody to be about before the
+ * tester has touched anything.
+ *
+ * Seeded per user rather than globally, and the picks overlap by chance rather
+ * than by design: a real population disagrees about most things and agrees about
+ * a few, and a seed where everybody likes the same five photos would make the
+ * affinity score meaningless.
+ *
+ * Callers pass the seeded candidates, never the demo account. See the note in
+ * `createInitialState`.
+ */
+export function seedReactionsFor(users: User[], posts: Post[], seed = 913): PostReaction[] {
+  if (posts.length === 0 || users.length === 0) return [];
+
+  const reactions: PostReaction[] = [];
+  const createdAt = '2026-01-01T00:00:00.000Z';
+
+  for (const user of users) {
+    const random = createRandom(seed + hashId(user.id));
+    // Between four and fourteen. Enough to clear the confidence damping, low
+    // enough that a seeded user is not nearly compatible with the whole seed.
+    const count = 4 + Math.floor(random() * 11);
+
+    for (let index = 0; index < count; index += 1) {
+      const post = posts[Math.floor(random() * posts.length)];
+      if (!post) continue;
+
+      // One in six is a dislike. Dislikes steer the feed and nothing else, so
+      // they exist to prove that they never become shared evidence.
+      const action: PostReactionAction = random() > 0.84 ? 'dislike' : 'like';
+
+      reactions.push({
+        id: `reaction_${user.id}_${post.id}`,
+        userId: user.id,
+        postId: post.id,
+        action,
+        createdAt,
+      });
+    }
+  }
+
+  // Two people can land on the same post, and the upsert path would normally
+  // collapse that to one row. Seeded reactions are written directly, so drop
+  // the duplicates here rather than letting a double-counted like inflate a
+  // pair's evidence.
+  const unique = new Map<string, PostReaction>();
+  for (const reaction of reactions) {
+    unique.set(`${reaction.userId}:${reaction.postId}`, reaction);
+  }
+  return [...unique.values()];
+}
+
+/** Small stable hash so every user id gets its own reaction stream. */
+function hashId(id: string): number {
+  let hash = 0;
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash << 5) - hash + id.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash);
 }
 
 /**
@@ -552,13 +515,18 @@ export function generateDemoUser(): User & { password: string } {
       distanceMode: 'nearby',
       maxDistance: 50,
       genders: [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY],
+      // Every goal a seeded candidate can be assigned. `friendship` was missing
+      // from this list while candidates are still assigned it, so the demo
+      // account excluded roughly a quarter of the pool through its own gate,
+      // with nothing anywhere on screen to say so.
       relationshipGoals: [
         RelationshipGoal.LONG_TERM,
         RelationshipGoal.SHORT_TERM,
         RelationshipGoal.CASUAL,
+        RelationshipGoal.FRIENDSHIP,
+        RelationshipGoal.NOT_SURE,
       ],
     },
-    questionnaire: demoQuestionnaire(),
     isVerified: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

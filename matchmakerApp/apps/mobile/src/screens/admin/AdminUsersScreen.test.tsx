@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor as rtlWaitFor,
+} from '@testing-library/react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AdminUsersScreen } from '@/screens/admin/AdminUsersScreen';
@@ -13,6 +19,17 @@ import type { ProfileStackParamList } from '@/navigation/types';
 jest.setTimeout(60_000);
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
+
+/**
+ * RNTL's `waitFor` defaults to a 1000 ms budget, which is not enough for a test
+ * that renders a screen and reads the mock database. Under parallel-worker load
+ * that is not a slow test, it is a failure that only appears on a loaded
+ * machine, so every wait in this file gets a real budget.
+ */
+function waitFor(callback: () => unknown, options?: { timeout?: number }) {
+  return rtlWaitFor(callback, { timeout: 30_000, ...options });
+}
+
 
 /**
  * The two admin screens in a bare navigator.

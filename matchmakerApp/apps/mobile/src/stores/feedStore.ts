@@ -1,14 +1,14 @@
 import { create } from 'zustand';
-import type { User } from '@match-makers/shared';
 import { AuthError } from '@/services/auth/AuthError';
 import { fetchFeed, sendSwipe } from '@/services/feed';
 import { fetchMatches, type MatchSummary } from '@/services/matches';
-import type { LoadState, SwipeOutcome, SwipeType } from '@/types';
+import type { DeckCandidate, LoadState, SwipeOutcome, SwipeType } from '@/types';
 
 const PAGE_SIZE = 10;
 
 interface FeedStore {
-  profiles: User[];
+  /** The deck, ordered best first. Each entry carries its own score breakdown. */
+  profiles: DeckCandidate[];
   page: number;
   hasMore: boolean;
   state: LoadState;
@@ -25,17 +25,31 @@ interface FeedStore {
   /** Most recent match, surfaced as an overlay on the feed. */
   lastMatch: SwipeOutcome | null;
   isSwiping: boolean;
-  activeIndex: number;
+  /**
+   * True when the deck came back empty because the viewer has not liked a photo.
+   *
+   * The deck refuses to rank on nothing, so a brand new account gets an empty
+   * deck with an explanation rather than cards scored on stated facts alone.
+   * Arrives with the page for the same reason `blockedReason` does.
+   */
+  needsTaste: boolean;
 
   load: (options?: { refresh?: boolean }) => Promise<void>;
   loadMore: () => Promise<void>;
-  swipe: (action: SwipeType) => Promise<void>;
+  /**
+   * Records a decision about one specific person, and removes them from the deck.
+   *
+   * Takes a userId rather than a position because the deck is a grid, not a
+   * stack with a top card. There is no "current" profile to infer the target
+   * from — the person being decided on is whoever was tapped.
+   */
+  swipe: (userId: string, action: SwipeType) => Promise<void>;
   dismissMatch: () => void;
   reset: () => void;
 }
 
 const INITIAL = {
-  profiles: [] as User[],
+  profiles: [] as DeckCandidate[],
   page: 1,
   hasMore: true,
   state: 'idle' as LoadState,
@@ -43,7 +57,7 @@ const INITIAL = {
   blockedReason: null as string | null,
   lastMatch: null as SwipeOutcome | null,
   isSwiping: false,
-  activeIndex: 0,
+  needsTaste: false,
 };
 
 export const useFeedStore = create<FeedStore>((set, get) => ({
@@ -57,8 +71,8 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
         profiles: result.items,
         page: 1,
         hasMore: result.hasMore,
-        activeIndex: 0,
         blockedReason: result.blockedReason,
+        needsTaste: result.needsTaste,
         state: 'success',
       });
     } catch (error) {
@@ -85,18 +99,16 @@ export const useFeedStore = create<FeedStore>((set, get) => ({
     }
   },
 
-  swipe: async (action) => {
-    const { profiles, activeIndex } = get();
-    const target = profiles[activeIndex];
+  swipe: async (userId, action) => {
+    const target = get().profiles.find((profile) => profile.user.id === userId);
     if (!target) return;
 
     set({ isSwiping: true });
     try {
-      const outcome = await sendSwipe(target.id, action);
+      const outcome = await sendSwipe(target.user.id, action);
       set((current) => ({
-        // Advance immediately; the request settles behind the animation.
-        profiles: current.profiles.filter((_, index) => index !== current.activeIndex),
-        activeIndex: 0,
+        // Gone immediately; the request settles behind the grid.
+        profiles: current.profiles.filter((profile) => profile.user.id !== userId),
         lastMatch: outcome.isMatch ? outcome : current.lastMatch,
         isSwiping: false,
       }));

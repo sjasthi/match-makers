@@ -13,10 +13,9 @@ import { ProfileImage } from './ProfileImage';
 import type { User } from '@match-makers/shared';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import { ageFromDateOfBirth } from '@/utils/mockData';
-import { compatibilityLabel, dealBreakerLabel, scoreCompatibility } from '@/utils/matching';
+import { compatibilityLabel, scoreCompatibility, type CompatibilityBreakdown } from '@/utils/matching';
 import { distanceBetween } from '@/utils/eligibility';
 import { formatDistance } from '@/utils/distance';
-import { choiceLabel, promptQuestion } from '@/prompts';
 
 const SWIPE_THRESHOLD = 110;
 const ROTATION_RANGE = 12;
@@ -29,6 +28,15 @@ interface Props {
   onSuperLike: () => void;
   onOpenDetail?: () => void;
   enabled?: boolean;
+  /**
+   * The score the deck was ordered by. Supplied by the feed, because only the
+   * feed can see the photo reactions that make up the taste half of the score.
+   *
+   * Falls back to scoring the pair directly when omitted, which is correct but
+   * less complete: it drops the taste bonus. That fallback exists for rendering
+   * a card in isolation, and it is why the product path passes this explicitly.
+   */
+  compatibility?: CompatibilityBreakdown;
 }
 
 /**
@@ -57,23 +65,10 @@ export const SwipeCard = memo(function SwipeCard({
   onSuperLike,
   onOpenDetail,
   enabled = true,
+  compatibility: scored,
 }: Props) {
   const position = useRef(new Animated.ValueXY()).current;
-  const compatibility = scoreCompatibility(viewer, user);
-
-  /**
-   * Shows a prompt the two of you actually agreed on, because that is the one
-   * thing here you can open a conversation with.
-   *
-   * Agreed on, specifically. Picking any prompt both people had answered meant
-   * the card could lead with a question you had given opposite answers to, and
-   * the strongest agreement first is the one most worth mentioning.
-   */
-  const icebreaker = (() => {
-    const strongest = compatibility.agreements[0];
-    if (!strongest) return undefined;
-    return user.questionnaire?.prompts?.find((answer) => answer.tag === strongest.tag);
-  })();
+  const compatibility = scored ?? scoreCompatibility(viewer, user);
 
   const resetPosition = useCallback(() => {
     Animated.spring(position, {
@@ -187,41 +182,39 @@ export const SwipeCard = memo(function SwipeCard({
               </Text>
             ) : null}
 
-            {icebreaker ? (
-              <View style={styles.promptBlock}>
-                <Text style={styles.promptQuestion} numberOfLines={2}>
-                  {promptQuestion(icebreaker.promptId, icebreaker.tag)}
-                </Text>
-                <Text style={styles.promptAnswer}>
-                  {choiceLabel(icebreaker.choice)}
-                  {icebreaker.note ? ` — ${icebreaker.note}` : ''}
-                </Text>
-              </View>
+            {/* What the two of you actually share, in words. The whole reason to
+                show a number is so this sentence can sit under it. */}
+            {compatibility.reason ? (
+              <Text style={styles.promptQuestion} numberOfLines={2} testID="swipe-card-reason">
+                {compatibility.reason}
+              </Text>
             ) : null}
 
             <View style={styles.chipRow}>
               <Chip compact style={styles.compatibilityChip} textStyle={styles.compatibilityText}>
-                {compatibility.dealBreakerClash
-                  ? dealBreakerLabel()
-                  : `${compatibilityLabel(compatibility.score)} · ${compatibility.score}%`}
+                {`${compatibilityLabel(compatibility.score)} · ${compatibility.score}%`}
               </Chip>
-              {compatibility.agreements.length > 0 ? (
-                <Chip compact style={styles.goalChip} textStyle={styles.compatibilityText}>
-                  {compatibility.agreements.length} prompt
-                  {compatibility.agreements.length === 1 ? '' : 's'} agreed on
-                </Chip>
-              ) : null}
-              {compatibility.conflicts.length > 0 ? (
-                <Chip compact style={styles.conflictChip} textStyle={styles.compatibilityText}>
-                  {compatibility.conflicts.length} differ
-                </Chip>
-              ) : null}
               {compatibility.sharedGoals ? (
                 <Chip compact style={styles.goalChip} textStyle={styles.compatibilityText}>
                   Same goal
                 </Chip>
               ) : null}
+              {compatibility.tasteAffinity > 0 ? (
+                <Chip
+                  compact
+                  style={styles.tasteChip}
+                  textStyle={styles.tasteText}
+                  testID="swipe-card-taste-chip"
+                >
+                  {compatibility.tasteAffinity >= 0.5
+                    ? `${compatibility.coLikedPosts} photos in common`
+                    : `${compatibility.sharedTags.length} shared ${
+                        compatibility.sharedTags.length === 1 ? 'interest' : 'interests'
+                      }`}
+                </Chip>
+              ) : null}
             </View>
+
           </View>
         </LinearGradient>
 
@@ -297,9 +290,7 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     color: 'rgba(255,255,255,0.85)',
   },
-  promptBlock: { gap: 2, marginBottom: SPACING.sm },
   promptQuestion: { color: COLORS.background, fontWeight: '600' },
-  promptAnswer: { color: COLORS.background, opacity: 0.9, fontStyle: 'italic' },
   bio: {
     fontSize: FONT_SIZES.sm,
     color: 'rgba(255,255,255,0.92)',
@@ -317,8 +308,23 @@ const styles = StyleSheet.create({
   goalChip: {
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  conflictChip: {
-    backgroundColor: 'rgba(245,158,11,0.35)',
+  /**
+   * Distinct from the other chips because it is the only one backed by
+   * something the viewer did rather than something they filled in, and it is
+   * the signal the photo feed exists to produce.
+   */
+  tasteChip: {
+    backgroundColor: 'rgba(255,107,107,0.45)',
+  },
+  tasteText: {
+    color: COLORS.background,
+    fontSize: FONT_SIZES.xs,
+    fontWeight: '700',
+  },
+  reason: {
+    color: 'rgba(255,255,255,0.86)',
+    fontSize: FONT_SIZES.xs,
+    marginTop: SPACING.xs,
   },
   compatibilityText: {
     color: COLORS.background,
