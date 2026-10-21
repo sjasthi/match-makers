@@ -1,9 +1,4 @@
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor as rtlWaitFor,
-} from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor as rtlWaitFor } from '@testing-library/react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -132,6 +127,19 @@ describe('Discovery preferences', () => {
     await waitFor(async () => {
       const stored = await adapter.getCurrentUser();
       expect(stored?.preferences).toMatchObject({ distanceMode: 'global', maxDistance: 70 });
+    });
+  });
+
+  it('persists an age range typed into the field', async () => {
+    const adapter = await signInDemo();
+    renderScreen();
+
+    fireEvent.changeText(screen.getByTestId('stepper-input-from'), '25');
+    fireEvent.press(screen.getByText('Save'));
+
+    await waitFor(async () => {
+      const stored = await adapter.getCurrentUser();
+      expect(stored?.preferences.ageRange).toMatchObject({ min: 25 });
     });
   });
 });

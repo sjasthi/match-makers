@@ -15,6 +15,8 @@ clicked through before the Express/Postgres/Redis API is built.
 | Server state | Plain async service functions behind the auth transport    |
 | Forms        | react-hook-form + Zod, with schemas shared with the server |
 | UI           | react-native-paper (MD3)                                   |
+| Database     | PostgreSQL 18, plain SQL DDL, no ORM                       |
+| API          | Express 4 + `pg`, sharing `@match-makers/shared` types     |
 | Testing      | Jest + `@testing-library/react-native`                     |
 
 ## Layout
@@ -22,6 +24,20 @@ clicked through before the Express/Postgres/Redis API is built.
 ```
 match-makers-fp3/
 ├── apps/
+│   ├── api/               Express API + PostgreSQL (FP2 backend)
+│   │   ├── db/
+│   │   │   ├── schema.sql The schema: enums, tables, indexes, constraints
+│   │   │   ├── migrate.ts Applies schema.sql, reading the same .env
+│   │   │   └── scripts/admin.ts   Grant/revoke/list admin from the CLI
+│   │   └── src/
+│   │       ├── admin.ts     requireAdmin, reading users.is_admin
+│   │       ├── auth.ts      Access and refresh tokens
+│   │       ├── cors.ts      Browser CORS, mounted first
+│   │       ├── db.ts        Pool, transactions, `pg` type parsers
+│   │       ├── errors.ts    ApiError + Postgres error-code mapping
+│   │       ├── password.ts  scrypt hashing and verification
+│   │       ├── db/          Row -> domain type mapping, user queries
+│   │       └── routes/      health, auth, profile, feed, swipes, matches, messages, posts
 │   ├── mobile/            Expo app
 │   │   ├── App.tsx        Providers: SafeArea, Paper, Navigation
 │   │   ├── assets/        Placeholder icons
@@ -44,6 +60,10 @@ match-makers-fp3/
 so the FP2 backend can import the exact same types and validation the app uses,
 rather than letting the two drift apart.
 
+`apps/api` is the FP2 backend that package was written for. It is now wired up:
+`apps/mobile/.env` points the app at it, and `npm run test:api` proves the app's
+own services drive it end to end.
+
 ## Getting started
 
 ```bash
@@ -51,7 +71,34 @@ npm install
 npm run dev          # or: npm start --workspace=apps/mobile
 ```
 
-Then press `w` for web, `a` for Android, or `i` for iOS. No server is required.
+Then press `w` for web, `a` for Android, or `i` for iOS.
+
+`apps/mobile/.env` currently points the app at `apps/api`, so start the backend
+too or the app has nothing to talk to:
+
+```bash
+npm run migrate --workspace=apps/api
+npm run dev --workspace=apps/api     # http://localhost:3001
+```
+
+The photo-library importer is admin-only, so grant the account you are signing in
+as before you expect it to work:
+
+```bash
+npm run admin --workspace=apps/api -- grant you@example.com
+```
+
+If the API reports `Port 3001 is already in use`, something already holds it --
+usually a second copy. `lsof -ti tcp:3001 | xargs kill`, or set `PORT=3002` and
+repoint `EXPO_PUBLIC_API_URL` in `apps/mobile/.env` to match. Two servers on
+different ports will not serve the app unless the app is told which one to use.
+
+To go back to the offline prototype, set `EXPO_PUBLIC_AUTH_MODE=mock` in that
+file and restart Expo. See **The Postgres database** below.
+
+If Expo starts on a different port because 8081 was taken, add it to
+`CORS_ORIGINS` in `apps/api/.env` -- a browser blocks the request otherwise, and
+the error reads like a network fault rather than a policy decision.
 
 ### Demo account
 
@@ -69,7 +116,7 @@ Copy `apps/mobile/.env.example` to `apps/mobile/.env`:
 
 | Variable                        | Default                     | Purpose                                              |
 | ------------------------------- | --------------------------- | ---------------------------------------------------- |
-| `EXPO_PUBLIC_AUTH_MODE`         | `mock`                      | Which auth strategy to use: `mock`, `jwt`, `session` |
+| `EXPO_PUBLIC_AUTH_MODE`         | `mock`                      | Which auth strategy to use: `mock` or `jwt`          |
 | `EXPO_PUBLIC_API_URL`           | `http://localhost:3000/api` | FP2 backend base URL                                 |
 | `EXPO_PUBLIC_MOCK_LATENCY`      | `350`                       | Simulated round-trip time in ms                      |
 | `EXPO_PUBLIC_MOCK_JITTER`       | `250`                       | Extra random delay in ms                             |
@@ -77,16 +124,28 @@ Copy `apps/mobile/.env.example` to `apps/mobile/.env`:
 
 ## Configurable auth
 
-FP2 left the auth strategy open, so the three plausible options are all
-implemented behind one interface and switchable **at runtime** from
-Settings → Developer, or from the switcher on the login screen. No code changes
+Two strategies, behind one interface, switchable **at runtime** from
+Settings → Developer or from the switcher on the login screen. No code changes
 and no rebuild required.
 
-| Mode      | Credentials                           | Storage                                              |
-| --------- | ------------------------------------- | ---------------------------------------------------- |
-| `mock`    | None; local database                  | AsyncStorage                                         |
-| `jwt`     | `Authorization: Bearer <accessToken>` | Access + refresh token in Keychain/Keystore          |
-| `session` | HttpOnly cookie, `withCredentials`    | Session id only (the cookie is unreadable by design) |
+| Mode   | Credentials                           | Storage                                     |
+| ------ | ------------------------------------- | ------------------------------------------- |
+| `mock` | None; local database                  | AsyncStorage                                |
+| `jwt`  | `Authorization: Bearer <accessToken>` | Access + refresh token in Keychain/Keystore |
+
+A third mode, `session` (HttpOnly cookie), used to be listed here. It has been
+removed: the API never implemented cookies, so choosing it could only ever
+produce a login that failed with no explanation, and a permanently broken option
+on a switch is worse than no option. `AuthMode` no longer includes it, so it
+cannot come back at a call site.
+
+That removal also **self-heals anyone stuck in `session`**: the mode is persisted
+to AsyncStorage and takes precedence over `.env`, so a device left on it by an
+older build would keep failing with nothing on screen to explain why. An
+unrecognised persisted value is now ignored and the environment wins.
+
+**Both modes are development affordances**, and the switcher lives in a section
+that is compiled away outside a dev build — see `__DEV__` in `SettingsScreen`.
 
 The split that makes this work:
 
@@ -105,6 +164,16 @@ Adding a real backend means writing one adapter and pointing
 for the FP2 Postgres + Redis setup. It seeds 20 profiles and 24 tagged photos,
 and supports login, registration, profile edits, swipes, matches, messaging, and
 photo reactions.
+
+It is no longer the default: `apps/mobile/.env` sets `EXPO_PUBLIC_AUTH_MODE=jwt`,
+so the app runs its HTTP branch against `apps/api` and real Postgres. The mock is
+still there, still seeded, and the whole test suite runs on it.
+
+The Settings rows that reach it ("Admin: all users", "Admin: photo library") live
+in a **Developer** section that only exists under `__DEV__`, and both stay disabled
+unless the mode is `mock` -- `services/admin.ts` reads the mock database directly
+and never calls the API. So in JWT mode the admin inspector is unreachable by
+design: it would show the 20 seeded profiles rather than anything in Postgres.
 
 Domain services (`services/feed.ts`, `services/posts.ts`, `services/matches.ts`,
 `services/profile.ts`) each have a mock branch and an HTTP branch, chosen by
@@ -137,6 +206,522 @@ Seeded candidates also get deliberately permissive preferences and a `global`
 distance mode. Since eligibility is mutual, a narrow radius on the seed would
 bind before the viewer's and the demo would demonstrate nothing about the
 viewer's own settings.
+
+## The Postgres database
+
+`apps/api` is the FP2 backend described in `fp_reviews.md`, and `db/schema.sql`
+is the storage that was being stubbed at with an AsyncStorage blob.
+
+**The app is now pointed at it.** `apps/mobile/.env` sets
+`EXPO_PUBLIC_AUTH_MODE=jwt` and `EXPO_PUBLIC_API_URL=http://localhost:3001`, so
+every screen runs its HTTP branch against real Postgres instead of the mock
+database. Both modes still exist — the mock is one env var away, and the whole
+test suite still runs on it.
+
+```bash
+# once, to create the role and database
+sudo -u postgres psql -c "CREATE ROLE matchmakers WITH LOGIN PASSWORD '...';"
+sudo -u postgres psql -c "CREATE DATABASE matchmakers OWNER matchmakers;"
+
+cp apps/api/.env.example apps/api/.env   # then fill in DATABASE_URL
+npm run migrate --workspace=apps/api    # applies db/schema.sql
+npm run dev --workspace=apps/api        # http://localhost:3001
+
+npm run dev                              # the app, in a second terminal
+```
+
+`migrate` is a Node script rather than a `psql` one-liner, so it reads
+`apps/api/.env` the same way the server does and needs no client binary on
+`PATH`. It is safe to re-run.
+
+The database ships **empty**. There is no seed script: the data is yours to
+enter, so what you demonstrate is what you put in.
+
+### CORS, and why web needs it
+
+`apps/mobile` web is served from `http://localhost:8081`; this API listens on
+`http://localhost:3001`. A browser treats those as different origins, sends an
+`OPTIONS` preflight, and refuses the real request if the response lacks
+`Access-Control-Allow-*`. So `apps/api/src/cors.ts` answers it, mounted before
+every route — a preflight that reaches `requireAuth` or the 404 handler comes
+back without the headers and is rejected again.
+
+**This is web-only.** Native (iOS/Android) has no browser enforcing origins, so
+the same bundle works on a phone with none of it.
+
+Origins come from `CORS_ORIGINS`, defaulting to the Expo dev ports. An allowlist
+rather than `*`: any page in the browser could otherwise call a local API
+holding real profiles, and `*` is illegal alongside credentials — so the day
+cookie sessions replace the bearer token, `*` would break everything. **If Expo
+picks a different port because 8081 is taken, add it there.**
+
+This is worth knowing because **no other check in the repo could catch it**.
+`curl` does not enforce CORS and Jest's `XMLHttpRequest` is not a browser's, so
+the entire suite passed against an API a browser could not reach. The three
+`cors` tests in `apiConnection.test.ts` assert the headers directly for exactly
+that reason; with the middleware commented out they fail while every functional
+test still passes.
+
+### Proving it is connected
+
+`apps/mobile/src/services/apiConnection.test.ts` is the answer to "is it really
+using Postgres?". It calls the app's own `services/auth`, `services/profile`,
+`services/posts`, `services/feed` and `services/matches` — the same functions a
+screen calls — in `jwt` mode, over HTTP, against a live server and real tables.
+Register, save a profile, read it back, import photos, react, build a deck,
+match, message, unmatch.
+
+```bash
+npm run migrate --workspace=apps/api
+npm run dev --workspace=apps/api
+npm run test:api --workspace=apps/mobile   # 10 passed
+```
+
+It is skipped by `npm test` because it needs a live server. It creates users
+prefixed `itest.` and deletes them afterwards, so it is safe to run against a
+database that has real data in it.
+
+### Why the schema, and not the blob
+
+The mock is one JSON document rewritten in full on every mutation, which works
+for 20 seeded profiles and stops working for anything else. But the interesting
+part was never the storage format — it was that the mock enforces its own
+invariants in application code, one `Array.find` at a time:
+
+| Mock, in code                              | Schema, as a constraint                                 |
+| ------------------------------------------ | ------------------------------------------------------- |
+| `swipedUserIds` builds a `Set`             | `UNIQUE (actor_id, target_user_id)` on `swipes`         |
+| `recordPostReaction` scans to dedupe       | `UNIQUE (user_id, post_id)` on `post_reactions`         |
+| `createMatch` filters the array for a pair | `CHECK (user_a_id < user_b_id)` + `UNIQUE` on `matches` |
+| `deletePost` deletes reactions by hand     | `ON DELETE CASCADE` from `post_reactions.post_id`       |
+| `updateProfile` merges `{...old, ...new}`  | Column-level `UPDATE`, and zod per field                |
+| password stored verbatim                   | `password_hash`, scrypt, never returned by any query    |
+
+That `CHECK (user_a_id < user_b_id)` is the one worth knowing. Storing the pair
+smallest-first makes `(alice, bob)` and `(bob, alice)` the same row by
+construction, so "one match per pair" is a single unique index instead of a scan
+on every insert. It also means there is no "my side" of a match row, so every
+query about _your_ conversations has to check both columns — which is a cost the
+constraint bought back several times over.
+
+The unique constraints are also what make the writes one statement each. A
+reaction is `INSERT ... ON CONFLICT (user_id, post_id) DO UPDATE`: the mock
+loaded every reaction, searched for one with the same pair, and rewrote the
+whole database to replace a single row.
+
+### Layout
+
+`db/schema.sql` is the whole schema and is safe to re-run. Enums are guarded in
+a `DO` block because Postgres has no `CREATE TYPE IF NOT EXISTS`; tables and
+indexes use `IF NOT EXISTS`. **Editing the labels of an existing enum is a
+migration, not a schema edit** — `ALTER TYPE ... ADD VALUE` cannot run inside a
+transaction, so re-running the file will not pick up the change.
+
+| Table              | Holds                                    | Notes                                        |
+| ------------------ | ---------------------------------------- | -------------------------------------------- |
+| `users`            | Identity and profile                     | Email unique and lower-cased by `CHECK`      |
+| `user_preferences` | Age range, distance mode, genders, goals | 1:1, cascades with the user                  |
+| `photos`           | Profile photos                           | Partial unique index: one primary per person |
+| `posts`            | The site-owned photo library             | Deliberately has no `user_id`                |
+| `post_images`       | The rendition ladder for each photo     | The `srcset` of the web, stored              |
+| `post_reactions`   | One answer per person per photo          | Upsert on conflict                           |
+| `swipes`           | One decision per ordered pair            | Cannot swipe yourself                        |
+| `matches`          | Canonical pairs                          | See above                                    |
+| `messages`         | Conversation contents                    | Indexed `(match_id, created_at DESC)`        |
+
+Two decisions that look odd and are not:
+
+- **`posts` has no `user_id`.** Posts belong to the platform. The feed is an
+  input device for working out what somebody likes; the matching that comes out
+  of it happens between people, so a post has no author to point at.
+- **Location lives on `users`, not `user_preferences`.** Preferences came out as
+  their own table because they are the most-read part of a profile and deserve a
+  foreign key. Coordinates did not, and keeping them on `users` is what lets the
+  feed query join one way instead of two.
+
+### The API
+
+Routes are mounted where the app's existing HTTP branches already call them, so
+the paths are not negotiable.
+
+| Method   | Path                       | Notes                                                       |
+| -------- | -------------------------- | ----------------------------------------------------------- |
+| `GET`    | `/health`                  | Runs `SELECT 1`; 500s if the database is down               |
+| `POST`   | `/auth/register`           | Accepts `RegisterData`; user + preferences, one transaction |
+| `POST`   | `/auth/login`              | scrypt; identical cost for unknown accounts                 |
+| `POST`   | `/auth/refresh`            | Rotates the refresh token                                   |
+| `POST`   | `/auth/logout`             | Revokes refresh tokens                                      |
+| `GET`    | `/auth/me`                 |                                                             |
+| `PATCH`  | `/profile`                 | Every field optional, as the app sends it                   |
+| `GET`    | `/profile/verification`    |                                                             |
+| `POST`   | `/profile/verification`    | Marks verified, with no actual check                        |
+| `GET`    | `/feed`                    | The mutual eligibility gate, as one query                   |
+| `POST`   | `/swipes`                  | Creates a match on two reciprocal likes                     |
+| `GET`    | `/matches`                 | Conversations, with unread counts                           |
+| `DELETE` | `/matches/:id`             | Unmatch; cascades to messages                               |
+| `GET`    | `/messages/:matchId`       | `{ items }`                                                 |
+| `POST`   | `/messages/:matchId`       |                                                             |
+| `POST`   | `/messages/:matchId/read`  | Set-based update, idempotent                                |
+| `GET`    | `/posts/feed`              | Library plus this caller's reactions                        |
+| `GET`    | `/posts`                   | `{ total }`, for the feed's empty states                    |
+| `GET`    | `/posts/taste`             | `{ summary }` on its own                                    |
+| `POST`   | `/posts/reactions`         | Upsert on conflict                                          |
+| `DELETE` | `/posts/reactions/:postId` | `{ removed }`                                               |
+| `POST`   | `/posts`                   | Import into the library                                     |
+| `DELETE` | `/posts/:postId`           | Cascades to reactions                                       |
+| `GET`    | `/admin/users`            | Every account; `requireAdmin`                               |
+| `GET`    | `/admin/users/:id`        | One account in full                                         |
+| `GET`    | `/admin/posts`            | The library with reaction counts                            |
+| `GET`    | `/admin/tags`             | Every tag in use, by frequency                              |
+
+These paths are not negotiable: they are the ones `services/*.ts` and the two HTTP
+auth adapters already call. Several were written against a contract and never
+executed, and they did not all agree -- `/messages/:matchId` rather than
+`/matches/:matchId/messages` was one. **The API moved to the app, not the other
+way round**, on the grounds that twenty-odd call sites in working code outrank a
+route table nobody had run.
+
+Responses are `ApiEnvelope<T>` and errors are `ApiErrorBody`, both from
+`@match-makers/shared`. The client unwraps the envelope in a single interceptor
+in `services/api/client.ts` rather than at each call site: every service and
+adapter reads `response.data.x` directly, so `requestWithData` had no callers and
+the envelope would have broken all of them at once. Validation is the same Zod
+schemas the forms use; a failure comes back as `fieldErrors` keyed by dotted field
+path.
+
+The eligibility gate is the part that actually moved. `utils/eligibility.ts` ran a
+`mutualGate` over every user in the database in the client; `GET /feed` now does
+it in one statement, in both directions, with a haversine distance for the
+`nearby` mode.
+
+### Image quality and sizing
+
+Photos are sized **automatically** on import. The importer keeps as much of the
+original as fits a byte budget, up to 2880px wide, and only shrinks further if
+the encoded file would be too large to store. The grid thumbnail is always
+generated separately at 640px.
+
+This replaced a fixed menu of sizes defaulting to 1200px, and the reason was a
+visible one: the full-screen viewer renders a photo at the **full viewport
+width**, so a 1200px source was being *upscaled* on any laptop — anything
+wider than 1200 CSS pixels. The grid looked sharp (it uses the 640px thumbnail)
+and the opened photo looked soft, which read as "the upload lost its quality".
+
+2880 is not a round number because it is what a 1440-point display at 2x needs
+in device pixels. Below that, the viewer is scaling up again.
+
+The fixed sizes remain as explicit caps, for somebody who would rather have the
+storage back than the pixels.
+
+**Profile photos go through the same resizer.** They used to bypass it entirely
+and store the picker's URI verbatim, which on web meant the original file as a
+base64 data URI — a 12-megapixel photo became a **nine-megabyte PNG in a text
+column**. They are now JPEG at 1200px, which covers the deck card, and about
+forty-five times smaller.
+
+### Real-time messages
+
+Messaging is plain HTTP: you send over `POST`, the other person sees it when they
+next fetch. On top of that there is now a WebSocket at `/ws`, and a message
+arriving is pushed to whoever is connected.
+
+The transport is **Postgres `LISTEN`/`NOTIFY`**, not Redis, and the reason is
+that it needs no new infrastructure: the database is already there, already
+running, and already the thing both sides of a conversation agree on. `NOTIFY`
+carries at most 8KB, so the payload is a pointer — "a message arrived in
+conversation X" — and the client fetches the message over HTTP as it does today.
+One source of truth for what a message is.
+
+Redis is where `fp_reviews.md` wants this to end up, and moving the fan-out to a
+Redis channel later is a contained change: the publish side is one function.
+
+```bash
+# the client connects with the access token it already has
+ws://localhost:3001/ws?token=<accessToken>
+```
+
+Verified with two concurrent clients against a live server: both received the
+message, **exactly once** each; a third account not in the conversation received
+nothing; and a socket with a bad token was refused with `4401` rather than
+accepted and hung up on.
+
+An earlier version delivered every message **twice** — it both notified the
+database and handed the payload straight to the sockets, and the listener
+delivered it again a moment later. Delivering only through the database is also
+what makes this work across more than one API process, which a direct hand-off
+would not.
+
+**The app consumes it.** `services/realtime.ts` owns one socket for the whole
+app, opened when the first screen wants a message and closed when the last one
+stops caring. The access token goes in the query string, because a browser
+cannot set headers on a WebSocket handshake; it is the same short-lived token
+the HTTP API uses, so it expires on the same clock, and a socket the server
+refuses for being expired is renewed and reconnected rather than left dead.
+
+**The socket is an optimisation, never the only way a message arrives.** If it
+is not connected, the chat screen polls every five seconds instead, and says so
+— "Reconnecting — messages will still arrive." A dropped connection costs
+latency, not messages, and it is visible rather than silent. Silently showing
+stale messages is worse than showing nothing.
+
+Verified end to end in a browser: one person signed in with the chat open, a
+second person sending a message over plain HTTP, and the message appearing in
+the first browser **without a reload**.
+
+### Looking at photos, editing them, and taking them away
+
+Three things that were missing, and which turned out to be one theme: a photo
+was something you could only ever see small.
+
+**Editing a photo's tags did not save.** The tag editor merged the new tags into
+the copy of the photo the client already had and sent **nothing** — there was no
+route to send it to. The screen showed the new tags, and the database kept the
+old ones until the screen was refetched. `PATCH /posts/:id` now carries the
+edit, and the tags are folded with the same schema the editor uses, so `Dogs`
+and `dogs` cannot end up stored as two different tags.
+
+**The import screen had no way to check a photo, and no way to back out.** The
+batch was a strip of 90-point thumbnails. Tapping one now opens it full size,
+with the way out of the batch on the same screen as the picture, and there is a
+cross on each thumbnail for the same thing without opening it. A photo that can
+only be seen as a thumbnail is a photo nobody can check.
+
+**Your own profile photos could not be looked at properly either.** They were a
+strip of squares where a tap silently promoted one to be the main photo and a
+long press deleted it — so a photo could not be seen before being promoted, and
+deletion sat behind a gesture nobody discovers, on a destructive action, where a
+mis-swipe would trigger it. Both now happen in a full-size view, where what is
+about to happen is visible before it happens. Somebody else's photos open
+read-only; your own open with **Make main photo** and **Remove**.
+
+### Matching: the tag vector, the decay, and the ranking
+
+The score is the client's algorithm, run in SQL. It was previously client-only,
+which meant the server could not rank by it and ordered the deck by registration
+date.
+
+**The vector.** `user_tag_affinity` holds one row per person per tag they have
+an opinion on, written the moment a reaction lands. A like increments the tag's
+count and touches the row; a dislike increments the other; changing your mind
+takes the old one back and applies the new one, so the vector never counts both
+opinions at once. The first tag of the photo is the vector's unit, so liking one
+photo moves every tag it carries.
+
+**The decay.** A like is worth less the longer ago it was:
+
+```
+effective = (likes - dislikes) x exp(-age x ln(2) / half_life)
+```
+
+with a **30-day half-life** — half the weight after 30 days, a quarter after 60.
+Decay is applied at *read* time from `last_activity_at`, not written into the
+row: a write-time moving average drifts, because the stored value is only right
+the instant it is written and disagrees with what should be shown a day later.
+Read-time decay is deterministic, needs no job to age rows out, and a test can
+fix a timestamp and assert the number.
+
+Both halves of the taste signal decay. The co-like half — photos you have both
+liked — is weighted by how recently *you* liked yours, because leaving it a raw
+count would make the decay almost invisible in the total, and it is 65% of the
+signal.
+
+**The similarity** is a **cosine** between the two people's tag vectors: the
+shared weight divided by the length of each vector.
+
+```
+cosine = (sum over shared tags of viewer_weight x candidate_weight)
+         / (length of the viewer's vector x length of the candidate's vector)
+```
+
+It replaced a normalisation that divided the shared weight by the *smaller* of
+the two tag counts, which said that somebody with two strong opinions and
+somebody with two hundred were equally well matched on the two they had in
+common. Cosine is the standard measure, it is bounded in [0, 1] without a clamp,
+and it prices a broad taste against a narrow one honestly.
+
+The length of a vector is the square root of the sum of its squared tag
+weights, over the person's **whole** positive vector rather than just the tags
+they happen to share. That last part cannot be skipped: truncating it to the
+shared tags would make every pair score 1.0, which is a number that means
+nothing.
+
+**The ranking** is computed by `npm run rescore` and stored in `match_scores`,
+and the feed reads that instead of computing it per request. This is the
+"background workers or database functions properly rescore candidate pools" the
+spec asks for, and it is also the only way the feed is fast: computing the
+affinity for a whole pool measured at **1.2 seconds over 400,000 rows**, paid on
+every request to answer a question that only changes when somebody reacts. The
+feed read is **under 2ms** over 2,000 candidates and 4,000,000 stored scores.
+
+The rescore is a batch, and it is the one thing here that is slow: about 1.8
+seconds per viewer on the synthetic dataset, because a cosine has to read every
+candidate's whole vector rather than only the tags they share. That is the
+trade — a batch that runs when somebody reacts, in exchange for a read that
+costs nothing. `npm run perf` measures it, and `db/perf-dataset.sql` builds the
+dataset it measures against.
+
+**The bands.** A percentage falls into `90+`, `75+`, `50+` or `below-50`, on
+the floors the spec names. The server returns the band with the score; the card
+shows a badge for the two strong ones, because `50+` next to a `50%` is saying
+it twice.
+
+Aged evidence moves a pair across a band, which is the point:
+
+| Age of the shared evidence | Affinity | Score | Band |
+| --- | --- | --- | --- |
+| fresh | 0.63 | 66 | 50+ |
+| 30 days | 0.47 | 54 | 50+ |
+| 60 days | 0.32 | 42 | below-50 |
+| 120 days | 0.11 | 25 | below-50 |
+
+And the score rises smoothly as the shared evidence accumulates, which is what
+the formula is supposed to do — measured through the real API, two people
+liking the same photos one at a time:
+
+| Photos in common | Affinity | Score | Band |
+| --- | --- | --- | --- |
+| 1 | 0.11 | 25 | below-50 |
+| 2 | 0.27 | 38 | below-50 |
+| 3 | 0.44 | 51 | 50+ |
+| 4 | 0.63 | 66 | 50+ |
+| 5 | 0.81 | 81 | 75+ |
+| 6 | 0.84 | 83 | 75+ |
+| 10 | 0.89 | 87 | 75+ |
+
+The increments shrink: 13, 13, 15, 15, 2, 2, 1, 0, 1. A score that jumped
+would be a score nobody could reason about.
+
+### The rendition ladder
+
+Photos are stored at several widths, and the app picks one per screen.
+
+This is the `srcset` pattern from the web, done by hand. A browser is given a
+`srcset` and a `sizes` hint, and it chooses: it works out the display width,
+multiplies by the device pixel ratio, and loads **the smallest rendition that is
+not smaller than the display needs**. It never upscales, and it never downloads
+more than it is going to show.
+
+React Native's `Image` has no `srcset` attribute, so the app makes the same
+choice itself — `pickVariant` in `apps/mobile/src/utils/images.ts` — and
+`post_images` holds the alternatives it chooses between. The rungs are 640, 1280
+and 2560; the full image is the top of the ladder and lives in
+`posts.image_uri`.
+
+Measured in a browser, against a 1440-point window:
+
+| | DPR 1 | DPR 2 |
+| --- | --- | --- |
+| Grid tile (342pt) | 640px | 1280px |
+| Full-screen viewer (1392pt) | 2560px | 2720px (the full) |
+
+So the grid downloads a 640px image to draw into a 342px box, and the viewer
+downloads the full one — which is the point. Before this there was a single
+image per photo, and every screen got it: a 342px tile was handed a 2720px
+photo, and on a 2x display the viewer stretched it to 2784 device pixels.
+
+**Storage roughly doubles.** A 2720px photo becomes about 1.9MB of data URI
+across its ladder instead of 0.9MB. The bytes are paid once at import rather
+than being stretched at display time, and the permanent answer is object storage
+with on-demand resizing, where the ladder is generated at the CDN instead of
+being stored. That is still open.
+
+**The source is the ceiling.** A ladder cannot invent pixels. A photo imported at
+2720px is soft on a 2560-point window at 2x no matter what, because the display
+wants 5120 device pixels and only 2720 exist. Importing a higher-resolution
+source is the only fix; the ladder makes sure the app uses every pixel it has.
+
+### Admin accounts
+
+```bash
+npm run admin -- list                 # who is an admin
+npm run admin -- grant you@example.com
+npm run admin -- revoke you@example.com
+```
+
+`users.is_admin` is a plain boolean, and this CLI is the only thing that can set
+it. There is **no HTTP route that grants admin**, on purpose: such a route would
+be reachable by anyone who could authenticate, and "it worked in dev" is a long
+way from "it is disabled in production". A CLI needs `DATABASE_URL`, so whoever
+runs it already holds more than the flag is worth.
+
+It is a CLI rather than a seeded admin because *which* account should be an admin
+is a decision. Seeding picks one before anybody has registered, and the mock
+adapter's demo account has no equivalent here. Register normally, then name it.
+
+The output names the account it acted on rather than just succeeding, because
+picking the right person out of a few similar addresses is the whole task:
+
+```
+$ npm run admin -- grant dem0@hotmail.com
+
+  No account with the email "dem0@hotmail.com".
+
+  Did you mean:
+    demo@hotmail.com
+
+  Register the account first, then grant it.
+```
+
+Once granted, `apps/mobile` shows the admin screens in **both** modes: mock reads
+the mock database, JWT calls `/admin/*`. The client cannot tell whether an
+account is an admin -- `User` has no such field -- so it does not pretend either
+way; the API answers `403` and the screen shows that.
+
+### What this does not do
+
+Stated plainly, because the README's "Not built yet" section used to cover all of
+it and no longer can:
+
+- **Scoring did not move.** `GET /feed` applies eligibility and orders by
+  `created_at`; the 80 points of shared taste are scored as zero, and the route
+  hard-codes `needsTaste: true` so the app keeps labelling the number
+  provisional instead of showing an out-of-20 score as a match. Porting
+  `tasteBetween` from `utils/taste.ts` is the same work as "move the score
+  server-side", which is why the deck's ordering still means nothing.
+- **`blockedReason` is a guess.** The app wants the server to explain an empty
+  deck per filter. This one can only tell "nobody has signed up" from "nobody
+  matches"; `summariseBlockers` in `utils/eligibility.ts` still does the real
+  version.
+- **No spatial index.** Latitude and longitude are plain columns with a btree,
+  and distance is computed per row. PostGIS, or at minimum `cube` +
+  `earthdistance`, is still the fix for a real candidate pool.
+- **Sessions are a table, not Redis.** Access tokens are signed and stateless.
+  Refresh tokens are opaque, stored hashed in `refresh_tokens`, and rotated on
+  every use, so logout really does revoke. A refresh token presented twice
+  revokes the whole family, because that is either a replay or a leaked dump.
+  An already-issued _access_ token still lives out its hour, which is the
+  standard trade for a two-tier scheme.
+- **No admin *system*.** `users.is_admin` is a single boolean, checked by
+  `requireAdmin` on the `/admin` routes and on the photo-library writes. There are
+  no roles, no permissions table, and no audit trail -- a grant or revoke leaves
+  no trace beyond the column itself. FP1 asked for manual admin review of user
+  reports, which is a considerably larger piece of work and is not this.
+- **Tests.** `npm run test:api --workspace=apps/mobile` drives the app's own
+  services against a live API and Postgres — 10 tests, opt-in, needs the server
+  running. The API has no unit tests of its own, so the schema and the SQL are
+  only as verified as that one suite and by hand.
+- **A dev-only delete route.** `DELETE /auth/dev/users/:id` exists so that
+  integration test can clean up after itself. It refuses to run when
+  `NODE_ENV=production`, and it is not a permission system.
+- **Timestamps.** `created_at`/`updated_at` are set by Postgres, and nothing
+  propagates `updated_at` to the `users` row when a photo or preference changes.
+
+### A bug this found in `@match-makers/shared`
+
+Two schemas do not describe what their own types say, and both are pre-existing:
+
+- `photoSchema` validates `{ uri, type, name }` — the `expo-image-picker` result
+  _before_ `services/imageImport.ts` has written a storable URI.
+  `profileSetupSchema` composes it into the field documented as "the contract for
+  a single setup call", but `ProfileSetupPayload.photos` is `Photo[]`, i.e.
+  `{ id, url, isPrimary, order }`.
+- `postReactionSchema` validates the whole stored record (`id`, `userId`,
+  `createdAt`), but the request type `PostReactionRequest` is `{ postId, action }`
+  — the caller does not choose their own user id or the timestamp.
+
+`routes/profile.ts` and `routes/posts.ts` declare the correct request shapes
+locally, with comments pointing here, rather than changing shared schemas on the
+picker's path in a commit that is about the database.
 
 ## Taste and the match score
 
@@ -576,6 +1161,25 @@ to disagree, and the fix is the reason `mutualGate` exists — see
 
 ### The photo library (admin)
 
+**The tag filter.** The library can be narrowed to the photos carrying one tag,
+which is the one query in the product that wants "every photo with this tag on
+it" — and the reason `posts.tags` has a `GIN` index. The operator is `@>`,
+array containment, and the order of the operands is not interchangeable: the
+photo's tags must contain the one being looked for, and the wrong way round
+silently returns everything.
+
+Measured against a 20,000-photo library:
+
+| | Plan | Time |
+| --- | --- | --- |
+| with the GIN index | Bitmap Index Scan | **0.38ms** |
+| without it | Seq Scan, 19,800 rows filtered out | 8.45ms |
+
+An index that no query uses is a write cost with no benefit, so this is the
+query that earns it. The tag *list* above the filter is a different shape — it
+wants every tag and every count, so there is no single tag to look up and the
+index has nothing to do there.
+
 **Settings → Admin: photo library** is the only write path in the app. It lists
 the library with reaction counts per photo, and imports new photos from the
 device's library with tags you type (Settings → Admin: photo library → *Import*).
@@ -852,6 +1456,14 @@ the rest of the app can be exercised; the capture step is not implemented.
 | `npm run lint`      | ESLint across all packages         |
 | `npm test`          | Jest across all packages           |
 | `npm run format`    | Prettier write                     |
+| `npm run dev --workspace=apps/api`         | Start the API on `:3001`      |
+| `npm run migrate --workspace=apps/api`     | Apply `db/schema.sql`         |
+| `npm run test:api --workspace=apps/mobile` | App services vs the live API   |
+| `npm run admin --workspace=apps/api -- grant <email>` | Give an account admin      |
+| `npm run rescore --workspace=apps/api`            | Recompute and store every ranking |
+| `npm run admin:backfill --workspace=apps/api`     | Rebuild the tag vectors from the reactions |
+| `npm run perf --workspace=apps/api`               | Time the rescore and the feed read   |
+| `npm run perf:compare --workspace=apps/api`       | Time the cosine against the measure it replaced |
 
 ## Not built yet
 
@@ -866,12 +1478,28 @@ Deliberately out of scope for a skeleton, and the natural next pieces of work:
 - A comment reaction on posts. `fp_reviews.md` asks for like *and* comment, on
   the argument that effort is what separates real users from bots. Only the like
   is built; the single-tap spam surface FP1 flagged is therefore still open.
-- Any moderation or admin role over the photo library. It is mock-mode only and
-  gated on nothing but being signed in in mock mode.
-- Push notifications and the Redis-backed swipe rate limiting
+- ~~Any moderation or admin role over the photo library~~ — **done in
+  `apps/api`.** `users.is_admin` gates the library routes, and only
+  `npm run admin -- grant <email>` can set it: there is deliberately no HTTP
+  route that grants admin, because a "make me an admin" endpoint is a
+  privilege-escalation surface. In mock mode the library is still open to
+  anybody signed in, because the mock has no users table to check
+- Push notifications, and the Redis-backed swipe rate limiting. **Real-time
+  delivery is done** — a WebSocket at `/ws` over Postgres `LISTEN`/`NOTIFY` — but
+  that is delivery to an open app, not a push to a closed one, and Redis (where
+  `fp_reviews.md` wants the fan-out to live) is not built
 - Offline caching and optimistic updates
 - Localisation (only English strings exist)
-- Moving the score server-side, so the weights can be tuned without an app update
+- ~~Moving the score server-side~~ — **done.** The score is computed in SQL
+  over a persistent tag vector, with a 30-day half-life on the evidence, and
+  the ranking is stored by `npm run rescore` so the feed reads it in under 2ms
+  rather than recomputing 1.2 seconds of affinity per request. The similarity
+  measure is a cosine in both places now — server and client — so the deck is
+  ordered by one measure and explained by the same one. The *weights* are still
+  the client's constants, transcribed into `apps/api/src/matching.ts`, and the
+  server's decay is not in the client's: the mock's tag weight has no half-life
+  in it, so mock mode and the real app will not show identical numbers for
+  identical evidence. Tuning the weights still means changing both
 - Re-ranking the feed over time, rather than sorting purely by score
 - Gating on sexual orientation and relationship goal. Both are scoring-only
   signals today, deliberately, and making them hard requirements is a product
@@ -882,9 +1510,12 @@ Deliberately out of scope for a skeleton, and the natural next pieces of work:
   centroids standing in for one. A miss today costs a profile its visibility to
   other people's nearby decks, not their signup. FP2 would resolve city names
   against a gazetteer, server-side, and that closes the gap properly
-- Distance-bounded database queries. The rules run in the client over the whole
-  candidate set, which is fine for 20 rows and wrong for a real pool. That wants
-  a spatial index, which is the same reason the score wants to move server-side
+- Distance-bounded database queries at any real scale. **Partly addressed by
+  `apps/api`**, which runs the whole mutual eligibility gate in one SQL statement
+  with a haversine distance instead of filtering 20 rows in the client. Still
+  missing is the spatial index that makes it cheap — latitude/longitude are plain
+  columns, so the distance is computed per row. PostGIS, or `cube` +
+  `earthdistance`, is the fix
 - Editing taste after answering a photo. **Profile → Taste profile** explains
   what was inferred and why, but a person cannot correct the inference directly;
   changing a like on a photo they already answered is the only lever

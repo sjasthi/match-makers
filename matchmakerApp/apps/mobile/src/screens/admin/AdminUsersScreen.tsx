@@ -22,24 +22,16 @@ export function AdminUsersScreen() {
   const navigation = useNavigation<Nav>();
   const [authMode] = useAuthMode();
   const currentUser = useCurrentUser();
-  const isMock = authMode === 'mock';
-
-  const { data, error, isLoading, refetch } = useAsync<AdminUserSummary[]>(async () => {
-    if (!isMock) return [];
-    return listAllUsers();
-  }, [isMock]);
-
-  if (!isMock) {
-    return (
-      <ScreenContainer>
-        <EmptyState
-          icon="🔒"
-          title="Mock mode only"
-          message="There is no backend to list accounts from yet. Switch the auth mode back to mock in Settings to inspect the seeded users."
-        />
-      </ScreenContainer>
-    );
-  }
+  // Both modes can list accounts now: mock reads the mock database, JWT asks
+  // `GET /admin/users`. Whether the request is *allowed* is the API's decision --
+  // it checks `users.is_admin` and answers 403, which surfaces in the error
+  // banner below. Gating here would only hide a fact the server is better placed
+  // to report, and would say "mock mode only" to somebody who is perfectly
+  // entitled.
+  const { data, error, isLoading, refetch } = useAsync<AdminUserSummary[]>(
+    () => listAllUsers(),
+    [authMode]
+  );
 
   return (
     <ScreenContainer padded={false}>
@@ -53,7 +45,7 @@ export function AdminUsersScreen() {
         ListHeaderComponent={
           <View style={styles.header}>
             <Text variant="bodySmall" style={styles.hint}>
-              Read-only. Every account in the mock database, newest first.
+              Read-only. Every account, newest first.
             </Text>
             {error ? <ErrorBanner message={error} onDismiss={refetch} /> : null}
             {data ? (
@@ -65,12 +57,12 @@ export function AdminUsersScreen() {
         }
         ListEmptyComponent={
           isLoading ? (
-            <LoadingState label="Reading the mock database..." />
+            <LoadingState label="Reading accounts..." />
           ) : (
             <EmptyState
               icon="👥"
               title="No accounts yet"
-              message="The mock database reseeds itself on first launch. If this is empty, reset it from Settings."
+              message="In mock mode the database reseeds itself on first launch -- if this is empty, reset it from Settings."
             />
           )
         }

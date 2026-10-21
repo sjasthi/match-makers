@@ -30,7 +30,6 @@ function waitFor(callback: () => unknown, options?: { timeout?: number }) {
   return rtlWaitFor(callback, { timeout: 30_000, ...options });
 }
 
-
 /**
  * The two admin screens in a bare navigator.
  *
@@ -117,12 +116,30 @@ describe('AdminUsersScreen', () => {
     expect(screen.getByText('nearby')).toBeTruthy();
   });
 
-  it('refuses to list anything outside mock mode', async () => {
+  /*
+   * In JWT mode this screen now calls `GET /admin/users` instead of refusing.
+   *
+   * There is no server in this suite, so the request fails and the screen shows
+   * the error -- which is the behaviour under test. The old version asserted
+   * "Mock mode only", which was correct while the admin routes did not exist and
+   * wrong the moment they did.
+   *
+   * What must NOT happen is the screen quietly rendering the mock database's 21
+   * seeded accounts because JWT mode happened to fail. That would look exactly
+   * like success, so the assertion is that the list is not on screen.
+   */
+  it('asks the API in jwt mode rather than falling back to seeded accounts', async () => {
     useAuthStore.setState({ authMode: 'jwt' });
 
     renderAdmin();
 
-    await waitFor(() => expect(screen.getByText('Mock mode only')).toBeTruthy());
-    expect(screen.queryByTestId('admin-users-list')).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId('admin-users-list')).toBeTruthy());
+
+    // Still the real screen, not a refusal panel.
+    expect(screen.queryByText('Mock mode only')).toBeNull();
+
+    // And no seeded accounts appeared, which is the failure that would pass
+    // unnoticed.
+    expect(screen.queryByText(/21 ACCOUNTS/)).toBeNull();
   });
 });

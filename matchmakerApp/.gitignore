@@ -18,6 +18,12 @@ yarn-error.log*
 *.tsbuildinfo
 .eslintcache
 
+# Jest keeps one transform cache per auth mode, because babel-preset-expo
+# inlines EXPO_PUBLIC_* into the transformed output and Jest's cache key does not
+# cover the environment. See apps/mobile/jest.config.js.
+.jest-cache/
+.jest-cache-api/
+
 # The Expo CLI regenerates this stub at the workspace root. The real configs
 # are apps/mobile/tsconfig.json and apps/shared/tsconfig.json.
 /tsconfig.json

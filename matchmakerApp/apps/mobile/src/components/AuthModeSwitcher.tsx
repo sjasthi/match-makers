@@ -8,13 +8,11 @@ import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 const MODE_LABELS: Record<AuthMode, string> = {
   mock: 'Mock',
   jwt: 'JWT',
-  session: 'Session',
 };
 
 const MODE_DESCRIPTIONS: Record<AuthMode, string> = {
   mock: 'Local data only, no server required.',
-  jwt: 'Bearer access token plus refresh rotation.',
-  session: 'HttpOnly cookie session.',
+  jwt: 'Real backend: bearer access token plus refresh rotation.',
 };
 
 interface Props {

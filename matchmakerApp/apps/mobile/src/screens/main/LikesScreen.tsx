@@ -223,6 +223,7 @@ export function LikesScreen() {
                 name={profile.user.name}
                 score={profile.compatibility.score}
                 reason={profile.compatibility.reason}
+                band={profile.band}
                 onPress={() => setDeciding(profile)}
                 testPrefix="deck-card"
               />
@@ -291,6 +292,7 @@ export function LikesScreen() {
                   user={deciding.user}
                   viewer={viewer}
                   compatibility={deciding.compatibility}
+                  band={deciding.band}
                   onLike={() => decide('like')}
                   onPass={() => decide('pass')}
                   onSuperLike={() => decide('super_like')}

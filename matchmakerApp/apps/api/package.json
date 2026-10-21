@@ -1,0 +1,38 @@
+{
+  "name": "@match-makers/api",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "migrate": "tsx db/migrate.ts",
+    "admin": "tsx scripts/admin.ts",
+    "admin:backfill": "tsx scripts/backfill-affinity.ts",
+    "rescore": "tsx scripts/rescore.ts",
+    "perf": "tsx scripts/perf-check.ts",
+    "perf:compare": "tsx scripts/perf-compare.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@match-makers/shared": "*",
+    "cors": "^2.8.6",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "postgres-array": "^3.0.4",
+    "ws": "^8.22.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.6",
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.18.2",
+    "eslint": "^8.56.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.3.3"
+  }
+}

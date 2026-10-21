@@ -106,11 +106,39 @@ describe('admin service', () => {
     expect(await getAdminUser('user_does_not_exist')).toBeNull();
   });
 
-  it('refuses to read anything outside mock mode', async () => {
+  /*
+   * In `jwt` mode these go to the API, which is what the HTTP branches in
+   * `admin.ts` now do.
+   *
+   * There is no server in this suite, so the calls fail with a network error --
+   * and that is precisely the thing worth asserting. The previous version of
+   * this file asserted the opposite: that the service *refused* outside mock
+   * mode. It used to throw `AdminUnavailableError`, which was correct while the
+   * admin routes did not exist, and stopped being correct the moment they did.
+   *
+   * What matters is that it tries the network rather than quietly answering from
+   * the mock database. Reading 20 seeded profiles when the caller asked for the
+   * real accounts would be the failure that looks like success.
+   */
+  it('asks the API rather than the mock database in jwt mode', async () => {
     await seedAndSignIn();
     await setActiveAuthMode('jwt');
 
-    await expect(listAllUsers()).rejects.toThrow(AdminUnavailableError);
-    await expect(getAdminUser('user_demo')).rejects.toThrow(AdminUnavailableError);
+    // Mock mode returned the 21 seeded accounts. A jwt-mode call that somehow
+    // still read the mock database would resolve rather than reject.
+    await expect(listAllUsers()).rejects.toThrow();
+    await expect(getAdminUser('user_demo')).rejects.toThrow();
+
+    // And it must not be the old "only works in mock mode" refusal either --
+    // that would mean the HTTP branch was never reached.
+    await expect(listAllUsers()).rejects.not.toThrow(AdminUnavailableError);
+  });
+
+  it('still answers from the mock database in mock mode', async () => {
+    await seedAndSignIn();
+
+    // The guard against the test above silently passing: mock mode is untouched
+    // by the HTTP branches.
+    expect(await listAllUsers()).toHaveLength(21);
   });
 });

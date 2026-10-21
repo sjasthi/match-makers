@@ -13,10 +13,20 @@ import { Text, TextInput } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Avatar, ErrorBanner, LoadingState, AppIcon } from '@/components';
 import { fetchMessages, sendMessage, type ChatMessage } from '@/services/matches';
+import { getAuthAdapter } from '@/services/auth';
+import { useRealtimeMessages } from '@/hooks/useRealtime';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { ChatStackParamList } from '@/navigation/types';
 
 type ChatRoute = RouteProp<ChatStackParamList, 'Chat'>;
+
+/**
+ * How often to refetch when the socket is not connected.
+ *
+ * Five seconds: long enough not to hammer the API, short enough that a
+ * conversation still feels live while the socket is down.
+ */
+const POLL_INTERVAL_MS = 5000;
 
 function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -48,6 +58,44 @@ export function ChatScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /*
+   * Real-time delivery.
+   *
+   * The socket tells us a message landed in this conversation; the message
+   * itself is fetched over HTTP as it always was, so there is one source of
+   * truth for what a message is. The notification carries no content, which is
+   * also why it cannot disagree with what the server would send.
+   *
+   * A refetch rather than an append: the notification says *that* something
+   * arrived, not what it was, so the honest response is to go and get it. It
+   * also picks up anything that changed while the app was closed.
+   */
+  const onMessage = useCallback(() => {
+    void load();
+  }, [load]);
+
+  const realtimeStatus = useRealtimeMessages(matchId, onMessage);
+
+  /*
+   * The polling fallback.
+   *
+   * The socket is an optimisation, not the only way a message arrives. If it
+   * is not connected, the screen polls instead -- so a dropped connection
+   * costs latency, not messages.
+   *
+   * Not in mock mode: there is no server to poll, and the mock's messages are
+   * already in memory.
+   */
+  useEffect(() => {
+    if (getAuthAdapter().mode === 'mock') return undefined;
+    if (realtimeStatus === 'open') return undefined;
+
+    const timer = setInterval(() => {
+      void load();
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [realtimeStatus, load]);
 
   const onSend = async () => {
     const content = draft.trim();
@@ -84,6 +132,21 @@ export function ChatScreen() {
               onDismiss={() => setError(null)}
               onRetry={() => void load()}
             />
+          </View>
+        ) : null}
+
+        {/*
+          A dead socket is worth saying out loud. The screen is polling and
+          still correct, but a person watching it should know that delivery is
+          degraded rather than wondering why the other side seems slow.
+        */}
+        {realtimeStatus === 'closed' || realtimeStatus === 'connecting' ? (
+          <View style={styles.deliveryWrap}>
+            <Text style={styles.delivery} testID="chat-delivery-status">
+              {realtimeStatus === 'closed'
+                ? 'Reconnecting — messages will still arrive.'
+                : 'Connecting to live updates…'}
+            </Text>
           </View>
         ) : null}
 
@@ -143,6 +206,8 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
   flex: { flex: 1 },
   bannerWrap: { paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm },
+  deliveryWrap: { paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm },
+  delivery: { color: COLORS.textMuted, fontSize: FONT_SIZES.xs, textAlign: 'center' },
   list: { padding: SPACING.lg, gap: SPACING.sm, flexGrow: 1, justifyContent: 'flex-end' },
   empty: { color: COLORS.textSecondary, textAlign: 'center', paddingVertical: SPACING.xl },
   bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: SPACING.sm, maxWidth: '80%' },

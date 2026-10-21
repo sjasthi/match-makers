@@ -22,12 +22,47 @@ function isAuthFreeRequest(config: RetriableRequest | undefined): boolean {
   return AUTH_FREE_PATHS.some((path) => config.url?.includes(path));
 }
 
+/**
+ * Unwraps `{ data, meta }` envelopes on the way back in.
+ *
+ * The API answers in `ApiEnvelope<T>`, which is the contract `types/api.ts`
+ * documents and what `requestWithData` was written for. But every service and
+ * adapter reads `response.data.something` directly -- twenty-odd call sites
+ * across `feed.ts`, `posts.ts`, `matches.ts`, `profile.ts` and both HTTP auth
+ * adapters -- so `requestWithData` had no callers and the envelope, if it had
+ * ever arrived, would have broken all of them at once.
+ *
+ * Unwrapping centrally fixes that for the existing code instead of editing
+ * twenty call sites, and it puts the rule in one place: a response body is an
+ * envelope or it is not, and every caller should not have to know which.
+ *
+ * The key check is what keeps this from eating a legitimate payload. It only
+ * unwraps a body whose keys are entirely within `{data, meta}` -- so a `User`
+ * or a `Post`, which have no `data` field, passes through untouched even if a
+ * payload ever grew one.
+ */
+function isEnvelope(body: unknown): body is ApiEnvelope<unknown> {
+  if (typeof body !== 'object' || body === null) return false;
+  const keys = Object.keys(body);
+  if (!keys.includes('data')) return false;
+  return keys.every((key) => key === 'data' || key === 'meta');
+}
+
 function createClient(): AxiosInstance {
-  return axios.create({
+  const client = axios.create({
     baseURL: API_CONFIG.BASE_URL,
     timeout: API_CONFIG.TIMEOUT,
     headers: { 'Content-Type': 'application/json' },
   });
+
+  client.interceptors.response.use((response) => {
+    if (isEnvelope(response.data)) {
+      response.data = response.data.data;
+    }
+    return response;
+  });
+
+  return client;
 }
 
 /**
@@ -118,12 +153,20 @@ function readErrorMessage(error: AxiosError): string {
   return 'Something went wrong. Please try again.';
 }
 
-/** Unwraps `{ data: ... }` envelopes used by the FP2 backend. */
+/**
+ * Reads a response body.
+ *
+ * The response interceptor above has already removed the envelope, so this is
+ * now just `response.data` -- which is what every other caller does. It is kept
+ * because it is the explicit spelling of "give me the payload", and because a
+ * caller that uses it will keep working if the unwrapping ever moves back out
+ * of the interceptor and into here.
+ */
 export async function requestWithData<T>(
   config: Parameters<AxiosInstance['request']>[0]
 ): Promise<T> {
-  const response = await getApiClient().request<ApiEnvelope<T>>(config);
-  return response.data.data;
+  const response = await getApiClient().request<T>(config);
+  return response.data;
 }
 
 export function resetApiClient(): void {

@@ -46,11 +46,35 @@ describe('ProfileImage', () => {
 });
 
 describe('PhotoManager', () => {
+  /*
+   * These used to be gestures on the thumbnail: a tap made a photo the main
+   * one, and a long press deleted it.
+   *
+   * That meant a photo could not be looked at before being promoted -- tapping
+   * it changed it rather than showing it -- and deletion sat behind a gesture
+   * nobody discovers, on a destructive action, where a mis-swipe would trigger
+   * it. Both now happen in a full-size view of the photo, where what is about
+   * to happen is visible before it happens.
+   */
+  it('opens the photo full size rather than promoting it on a tap', () => {
+    const onChange = jest.fn();
+    render(
+      <PhotoManager user={user} photos={[photo('a', true), photo('b')]} onChange={onChange} />
+    );
+
+    fireEvent.press(screen.getByLabelText(/Photo by/));
+
+    // The viewer opened, and nothing was changed.
+    expect(screen.getByTestId('photo-manager-viewer')).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('refuses to delete the last remaining photo', () => {
     const onChange = jest.fn();
     render(<PhotoManager user={user} photos={[photo('a', true)]} onChange={onChange} />);
 
-    fireEvent(screen.getByLabelText(/Main photo/), 'longPress');
+    fireEvent.press(screen.getByLabelText(/Main photo/));
+    fireEvent.press(screen.getByTestId('photo-manager-viewer-action-remove'));
 
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getByText(/Keep at least one photo/)).toBeTruthy();
@@ -67,7 +91,8 @@ describe('PhotoManager', () => {
     );
 
     // Only non-primary thumbs carry the "Photo by ..." label.
-    fireEvent(screen.getAllByLabelText(/Photo by/)[0]!, 'longPress');
+    fireEvent.press(screen.getAllByLabelText(/Photo by/)[0]!);
+    fireEvent.press(screen.getByTestId('photo-manager-viewer-action-remove'));
 
     expect(onChange).toHaveBeenCalledTimes(1);
     const next = onChange.mock.calls[0][0] as Photo[];
@@ -81,7 +106,8 @@ describe('PhotoManager', () => {
       <PhotoManager user={user} photos={[photo('a', true), photo('b')]} onChange={onChange} />
     );
 
-    fireEvent(screen.getByLabelText('Main photo. Tap another to change'), 'longPress');
+    fireEvent.press(screen.getByLabelText(/Main photo/));
+    fireEvent.press(screen.getByTestId('photo-manager-viewer-action-remove'));
 
     const next = onChange.mock.calls[0][0] as Photo[];
     expect(next.map((p) => p.id)).toEqual(['b']);
@@ -89,13 +115,14 @@ describe('PhotoManager', () => {
     expect(next.some((p) => p.isPrimary)).toBe(true);
   });
 
-  it('promotes a tapped photo to primary', () => {
+  it('promotes a photo to primary from the viewer', () => {
     const onChange = jest.fn();
     render(
       <PhotoManager user={user} photos={[photo('a', true), photo('b')]} onChange={onChange} />
     );
 
     fireEvent.press(screen.getByLabelText(/Photo by/));
+    fireEvent.press(screen.getByTestId('photo-manager-viewer-action-make-main-photo'));
 
     const next = onChange.mock.calls[0][0] as Photo[];
     expect(next.find((p) => p.id === 'b')?.isPrimary).toBe(true);

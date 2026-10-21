@@ -162,7 +162,6 @@ export class MockAuthAdapter implements AuthAdapter {
     await Promise.all([
       store.remove(AUTH_STORAGE_KEYS.ACCESS_TOKEN),
       store.remove(AUTH_STORAGE_KEYS.REFRESH_TOKEN),
-      store.remove(AUTH_STORAGE_KEYS.SESSION_ID),
       store.remove(MOCK_REFRESH_TOKEN),
     ]);
   }

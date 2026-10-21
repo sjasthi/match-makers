@@ -7,6 +7,21 @@ process.env.EXPO_PUBLIC_MOCK_LATENCY = '0';
 process.env.EXPO_PUBLIC_MOCK_JITTER = '0';
 process.env.EXPO_PUBLIC_MOCK_FAILURE_RATE = '0';
 
+// Pin the auth mode to `mock` for the whole suite, overriding any local `.env`.
+//
+// This has to be explicit. `babel-preset-expo` inlines `process.env.EXPO_PUBLIC_*`
+// at transform time and it reads `.env`, so a developer who set
+// `EXPO_PUBLIC_AUTH_MODE=jwt` to point the app at `apps/api` silently turned all
+// 28 screen suites into tests that try to reach a real server over HTTP. They
+// then fail on connection timeouts rather than on anything to do with the code
+// under test, which is the worst possible failure mode.
+//
+// Skipped when `RUN_API_TESTS=1`, because `apiConnection.test.ts` is the one
+// suite that is supposed to run against the real API.
+if (process.env.RUN_API_TESTS !== '1') {
+  process.env.EXPO_PUBLIC_AUTH_MODE = 'mock';
+}
+
 // @expo/vector-icons calls expo-font's getLoadedFonts, which jest-expo's
 // environment does not provide. Icon fonts are irrelevant in tests.
 jest.mock('expo-font', () => ({
@@ -41,3 +56,5 @@ jest.mock(
   'react-native-safe-area-context',
   () => require('react-native-safe-area-context/jest/mock').default
 );
+
+

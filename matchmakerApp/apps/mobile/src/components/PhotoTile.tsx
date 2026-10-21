@@ -5,6 +5,7 @@ import type { Post, PostReactionAction } from '@match-makers/shared';
 
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import { tagColor, tagGlyph, tagLabel } from '@/utils/interests';
+import { pickTileVariant } from '@/utils/images';
 import { tileAspectRatio } from '@/utils/masonry';
 
 interface Props {
@@ -57,11 +58,14 @@ export const PhotoTile = memo(function PhotoTile({
   const [failed, setFailed] = useState(false);
   const height = Math.round(width * tileAspectRatio(post));
 
-  // The grid copy, falling back to the full image. Ten tiles at grid size decode
-  // roughly a quarter of the memory that ten full-size ones do, and every post
-  // written before the importer produced two copies has no thumb at all, so the
-  // fallback is the normal path for old data rather than an edge case.
-  const uri = post.thumbUri || post.imageUri;
+  // The rendition the tile actually needs, which is usually the smallest one.
+  //
+  // Ten tiles at grid size decode roughly a quarter of the memory that ten
+  // full-size ones do, and the tile is a couple of hundred CSS pixels wide, so
+  // it wants the small rung even on a 2x screen. The fallback to the full image
+  // is the normal path for old data -- anything imported before the importer
+  // produced a ladder has no thumb at all.
+  const uri = pickTileVariant(post, width);
 
   // A post that arrives after a previous one failed should get a fresh attempt
   // rather than inherit its failure, or the rest of the grid renders as tiles.
@@ -92,7 +96,10 @@ export const PhotoTile = memo(function PhotoTile({
         />
       ) : (
         <View
-          style={[styles.tileFill, { backgroundColor: primary ? tagColor(primary) : COLORS.surfaceVariant }]}
+          style={[
+            styles.tileFill,
+            { backgroundColor: primary ? tagColor(primary) : COLORS.surfaceVariant },
+          ]}
           testID={testID ? `${testID}-tile` : undefined}
         >
           {/* Stands in for a photo the library does not have. Still the tag,
@@ -116,7 +123,11 @@ export const PhotoTile = memo(function PhotoTile({
       ) : null}
 
       {reaction === 'like' ? (
-        <View style={styles.likedBadge} pointerEvents="none" testID={testID ? `${testID}-liked` : undefined}>
+        <View
+          style={styles.likedBadge}
+          pointerEvents="none"
+          testID={testID ? `${testID}-liked` : undefined}
+        >
           <Text style={styles.likedGlyph} allowFontScaling={false}>
             ♥
           </Text>
@@ -134,9 +145,7 @@ export const PhotoTile = memo(function PhotoTile({
           disabled={!primary}
           accessibilityRole="button"
           accessibilityLabel={
-            primary
-              ? `Show only ${tagLabel(primary)} photos`
-              : 'This photo has no tag to filter by'
+            primary ? `Show only ${tagLabel(primary)} photos` : 'This photo has no tag to filter by'
           }
           accessibilityState={{ selected: primary === activeTag }}
           hitSlop={6}

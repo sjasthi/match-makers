@@ -180,6 +180,24 @@ export interface Post {
   width?: number;
   height?: number;
   /**
+   * Smaller renditions of the same photo, widest first.
+   *
+   * This is the `srcset` of the web, in the form React Native can use. On the
+   * web a browser picks the right rendition itself from `srcset` and `sizes`,
+   * using the viewport width multiplied by the device pixel ratio. React
+   * Native's `Image` has no such attribute, so the app makes the same choice --
+   * see `pickVariant` in `utils/images.ts`.
+   *
+   * Without a ladder there is only one image, and it has to be big enough for
+   * the largest display anyone might use. A photo shown at 2500 CSS pixels on a
+   * 2x screen needs 5000 device pixels, so a single 2720px rendition is
+   * stretched and looks soft. That is the problem `srcset` exists to solve.
+   *
+   * `imageUri` remains the largest rendition, so a client that knows nothing
+   * about variants still gets the best available image rather than the smallest.
+   */
+  variants?: PostVariant[];
+  /**
    * Free text, in the canonical form `normaliseTag` produces. Ordered, and never
    * empty. The first entry is the primary tag: it is the one shown as the caption
    * and the one a co-like is attributed to in the match reason, so it has to be a
@@ -187,6 +205,14 @@ export interface Post {
    */
   tags: string[];
   createdAt: string;
+}
+
+/** One rendition of a photo, at a known width. */
+export interface PostVariant {
+  /** Pixel width of `uri`. */
+  width: number;
+  /** The image itself. */
+  uri: string;
 }
 
 /**

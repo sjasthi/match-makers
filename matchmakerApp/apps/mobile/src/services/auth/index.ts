@@ -4,21 +4,26 @@ import { setAuthTransport } from '@/services/api/client';
 import type { AuthMode } from './AuthAdapter';
 import { JWTAuthAdapter } from './JWTAuthAdapter';
 import { MockAuthAdapter } from './MockAuthAdapter';
-import { SessionAuthAdapter } from './SessionAuthAdapter';
 
 function createAdapter(mode: AuthMode) {
   switch (mode) {
     case 'jwt':
       return new JWTAuthAdapter();
-    case 'session':
-      return new SessionAuthAdapter();
     case 'mock':
       return new MockAuthAdapter();
   }
 }
 
+/**
+ * Recognises a persisted mode.
+ *
+ * Anything unrecognised -- including the removed `session` -- is ignored, which
+ * is what makes the switcher self-healing. An account left in `session` by an
+ * older build would otherwise keep overriding the environment and failing to
+ * log in, with nothing on screen to say why.
+ */
 function isAuthMode(value: unknown): value is AuthMode {
-  return value === 'mock' || value === 'jwt' || value === 'session';
+  return value === 'mock' || value === 'jwt';
 }
 
 function readEnvMode(): AuthMode {

@@ -1,7 +1,6 @@
 export const AUTH_STORAGE_KEYS = {
   ACCESS_TOKEN: 'auth.access_token',
   REFRESH_TOKEN: 'auth.refresh_token',
-  SESSION_ID: 'auth.session_id',
   AUTH_MODE: 'auth.mode',
 } as const;
 

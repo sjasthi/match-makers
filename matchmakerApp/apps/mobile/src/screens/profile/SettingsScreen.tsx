@@ -14,6 +14,10 @@ type Nav = NativeStackNavigationProp<ProfileStackParamList, 'Settings'>;
 export function SettingsScreen() {
   const navigation = useNavigation<Nav>();
   const [authMode, changeAuthMode] = useAuthMode();
+  // Both admin rows are available in both modes now. In mock mode they read the
+  // mock database; in JWT mode they call `apps/api`, which decides for itself
+  // whether this account has admin and answers 403 if not. The client has no way
+  // to know -- `User` carries no admin flag -- so it must not pretend either way.
   const isMock = authMode === 'mock';
   const [notifications, setNotifications] = useState(true);
   const [showMe, setShowMe] = useState(true);
@@ -62,45 +66,70 @@ export function SettingsScreen() {
           />
         </Section>
 
-        <Section title="Developer">
-          <View style={styles.developerBlock}>
-            <Text variant="bodySmall" style={styles.developerHint}>
-              Switch the auth strategy used by every screen without touching the backend.
-            </Text>
-            <AuthModeSwitcher value={authMode} onChange={changeAuthMode} />
-          </View>
+        {/*
+         * Developer tools only exist in a development build.
+         *
+         * Everything in here is a development affordance rather than a product
+         * feature: a switch for which auth strategy every screen uses, an
+         * inspector over a database that only exists in mock mode, and a button
+         * that wipes and reseeds it. None of that belongs in a shipping
+         * Settings screen, where "Reset mock data" reads as a way to lose your
+         * account and the switcher reads as a way to break the app.
+         *
+         * `__DEV__` is defined by Metro and is statically false in a release
+         * bundle, so this is compiled away rather than hidden behind a flag
+         * somebody can flip. It stays visible under `expo start` and under
+         * `expo export --dev`, which is what a demo runs on.
+         */}
+        {__DEV__ && (
+          <Section title="Developer">
+            <View style={styles.developerBlock}>
+              <Text variant="bodySmall" style={styles.developerHint}>
+                Switch the auth strategy used by every screen without touching the backend.
+              </Text>
+              <AuthModeSwitcher value={authMode} onChange={changeAuthMode} />
+            </View>
 
-          <AdminRow
-            enabled={isMock}
-            onPress={() => navigation.navigate('AdminUsers')}
-            label="Admin: all users"
-            hint="Read-only. Every account in the mock database."
-            disabledHint="Switch to mock mode to inspect seeded users."
-            icon="shield-account"
-          />
+            <AdminRow
+              enabled
+              onPress={() => navigation.navigate('AdminUsers')}
+              label="Admin: all users"
+              hint={
+                isMock
+                  ? 'Read-only. Every seeded account.'
+                  : 'Read-only. Every account on the server.'
+              }
+              icon="shield-account"
+            />
 
-          {/* The only write path in the app. Separate from the read-only row
-              above so it is obvious which one of the two can change something. */}
-          <AdminRow
-            enabled={isMock}
-            onPress={() => navigation.navigate('AdminPosts')}
-            label="Admin: photo library"
-            hint="Import and tag the site-owned photos the feed shows."
-            disabledHint="Switch to mock mode to import photos."
-            icon="image-multiple-outline"
-            testID="settings-admin-posts-row"
-          />
+            {/* The only write path in the app. Separate from the read-only row
+                above so it is obvious which one of the two can change something. */}
+            <AdminRow
+              enabled
+              onPress={() => navigation.navigate('AdminPosts')}
+              label="Admin: photo library"
+              hint={
+                isMock
+                  ? 'Import and tag the seeded photos the feed shows.'
+                  : 'Import and tag the photos the feed shows. Needs an admin account.'
+              }
+              icon="image-multiple-outline"
+              testID="settings-admin-posts-row"
+            />
 
-          <Pressable
-            onPress={() => void resetMockData()}
-            style={styles.dangerRow}
-            accessibilityRole="button"
-            disabled={resetting}
-          >
-            <AppIcon name="restore" size={18} color={COLORS.error} />
-            <Text style={styles.dangerText}>{resetting ? 'Resetting...' : 'Reset mock data'}</Text>
-          </Pressable>
-        </Section>
+            <Pressable
+              onPress={() => void resetMockData()}
+              style={styles.dangerRow}
+              accessibilityRole="button"
+              disabled={resetting}
+            >
+              <AppIcon name="restore" size={18} color={COLORS.error} />
+              <Text style={styles.dangerText}>
+                {resetting ? 'Resetting...' : 'Reset mock data'}
+              </Text>
+            </Pressable>
+          </Section>
+        )}
 
         <Text variant="bodySmall" style={styles.footer}>
           Match Makers prototype. Build 0.1.0
@@ -134,7 +163,8 @@ function AdminRow({
   onPress: () => void;
   label: string;
   hint: string;
-  disabledHint: string;
+  /** Only shown when `enabled` is false. */
+  disabledHint?: string;
   icon: 'shield-account' | 'image-multiple-outline';
   testID?: string;
 }) {

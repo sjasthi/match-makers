@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, View } from 'react-native';
-import { ActivityIndicator, FAB, Text } from 'react-native-paper';
+import { FlatList, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Chip, FAB, Text } from 'react-native-paper';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenContainer, LoadingState, EmptyState, ErrorBanner, TagInput } from '@/components';
@@ -41,28 +41,23 @@ const THUMB = 72;
 export function AdminPostsScreen() {
   const navigation = useNavigation<Nav>();
   const [authMode] = useAuthMode();
-  const isMock = authMode === 'mock';
 
-  const {
-    data,
-    error,
-    isLoading,
-    refetch,
-  } = useAsync<AdminPostSummary[]>(async () => (isMock ? listPosts() : []), [isMock]);
+  // The tag the library is narrowed to, or undefined for all of them.
+  const [tag, setTag] = useState<string | undefined>();
+
+  // Same reasoning as the account list: both modes can read the library, and a
+  // caller without admin gets a 403 from the API rather than a misleading
+  // "mock mode only" panel from the client.
+  const { data, error, isLoading, refetch } = useAsync<AdminPostSummary[]>(
+    () => listPosts(tag),
+    [authMode, tag]
+  );
+
+  // The filter strip. A failure here costs the filter, not the library, so it is
+  // not surfaced as an error on the screen.
+  const { data: knownTags } = useAsync<Array<{ tag: string; count: number }>>(listAllTags, []);
 
   useFocusEffect(refetch);
-
-  if (!isMock) {
-    return (
-      <ScreenContainer>
-        <EmptyState
-          icon="🔒"
-          title="Mock mode only"
-          message="There is no backend to store imported photos in yet. Switch the auth mode back to mock in Settings."
-        />
-      </ScreenContainer>
-    );
-  }
 
   return (
     <ScreenContainer padded={false}>
@@ -74,13 +69,17 @@ export function AdminPostsScreen() {
         ListHeaderComponent={
           <View style={styles.header}>
             <Text variant="bodySmall" style={styles.hint}>
-              Site-owned content. Every photo here belongs to the app, not to a
-              profile. Resetting mock data in Settings clears it.
+              Site-owned content. Every photo here belongs to the app, not to a profile. Resetting
+              mock data in Settings clears it.
             </Text>
             {error ? <ErrorBanner message={error} onDismiss={refetch} /> : null}
+            {knownTags && knownTags.length > 0 ? (
+              <TagFilter tags={knownTags} selected={tag} onSelect={setTag} />
+            ) : null}
             {data ? (
               <Text variant="labelLarge" style={styles.count}>
                 {data.length} {data.length === 1 ? 'PHOTO' : 'PHOTOS'}
+                {tag ? ` TAGGED ${tagLabel(tag).toUpperCase()}` : ''}
               </Text>
             ) : null}
           </View>
@@ -88,6 +87,14 @@ export function AdminPostsScreen() {
         ListEmptyComponent={
           isLoading ? (
             <LoadingState label="Reading the library..." />
+          ) : tag ? (
+            <EmptyState
+              icon="🔍"
+              title={`Nothing tagged ${tagLabel(tag)}`}
+              message="No photo in the library carries that tag."
+              actionLabel="Show every photo"
+              onAction={() => setTag(undefined)}
+            />
           ) : (
             <EmptyState
               icon="🖼️"
@@ -110,6 +117,67 @@ export function AdminPostsScreen() {
         testID="admin-import-fab"
       />
     </ScreenContainer>
+  );
+}
+
+/**
+ * The tag filter strip.
+ *
+ * A horizontal scroll rather than a wrapping group, because the library's tag
+ * vocabulary grows with the library and a wrapping group of forty chips pushes
+ * the photos it is meant to filter off the bottom of the screen.
+ *
+ * The counts are on the chips because "beach" with four photos and "travel" with
+ * one are different amounts of information, and picking a tag that leads to a
+ * single photo is a waste of a tap if the number was visible first.
+ */
+function TagFilter({
+  tags,
+  selected,
+  onSelect,
+}: {
+  tags: Array<{ tag: string; count: number }>;
+  selected?: string;
+  onSelect: (tag: string | undefined) => void;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.filterRow}
+      testID="admin-posts-tag-filter"
+    >
+      <Chip
+        selected={selected === undefined}
+        onPress={() => onSelect(undefined)}
+        showSelectedCheck={false}
+        style={[styles.filterChip, selected === undefined && styles.filterChipSelected]}
+        textStyle={[styles.filterChipText, selected === undefined && styles.filterChipTextSelected]}
+        accessibilityLabel="Show every photo"
+        accessibilityState={{ selected: selected === undefined }}
+      >
+        All
+      </Chip>
+
+      {tags.map((entry) => {
+        const isSelected = selected === entry.tag;
+        return (
+          <Chip
+            key={entry.tag}
+            selected={isSelected}
+            onPress={() => onSelect(isSelected ? undefined : entry.tag)}
+            showSelectedCheck={false}
+            style={[styles.filterChip, isSelected && styles.filterChipSelected]}
+            textStyle={[styles.filterChipText, isSelected && styles.filterChipTextSelected]}
+            accessibilityLabel={`Show the ${entry.count} photos tagged ${entry.tag}`}
+            accessibilityState={{ selected: isSelected }}
+            testID={`admin-posts-filter-${entry.tag}`}
+          >
+            {tagLabel(entry.tag)} {entry.count}
+          </Chip>
+        );
+      })}
+    </ScrollView>
   );
 }
 
@@ -233,15 +301,16 @@ function TagEditor({
       await updatePostTags(postId, tags);
       onSaved();
     } catch (caught) {
-      setError(caught instanceof AdminImportError ? caught.message : 'Those tags could not be saved.');
+      setError(
+        caught instanceof AdminImportError ? caught.message : 'Those tags could not be saved.'
+      );
     }
   };
 
   return (
     <View style={styles.editor}>
       <Text variant="bodySmall" style={styles.hint}>
-        The first tag is the primary one. It is what a co-like is attributed to
-        in the match reason.
+        The first tag is the primary one. It is what a co-like is attributed to in the match reason.
       </Text>
 
       <TagInput
@@ -297,6 +366,28 @@ function TagEditor({
 }
 
 const styles = StyleSheet.create({
+  filterRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    paddingVertical: SPACING.xs,
+  },
+  filterChip: {
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  filterChipSelected: {
+    backgroundColor: 'rgba(255,107,107,0.12)',
+    borderColor: COLORS.primary,
+  },
+  filterChipText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+  },
+  filterChipTextSelected: {
+    color: COLORS.primary,
+    fontWeight: '700',
+  },
   content: { paddingBottom: SPACING.xxl },
   header: { padding: SPACING.lg, gap: SPACING.sm },
   hint: { color: COLORS.textSecondary, fontSize: FONT_SIZES.sm },

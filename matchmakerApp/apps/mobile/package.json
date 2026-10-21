@@ -13,6 +13,7 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test": "jest",
+    "test:api": "EXPO_PUBLIC_AUTH_MODE=jwt EXPO_PUBLIC_API_URL=http://localhost:3001 RUN_API_TESTS=1 jest src/services/apiConnection.test.ts",
     "format": "prettier --write \"src/**/*.{ts,tsx,json}\""
   },
   "dependencies": {

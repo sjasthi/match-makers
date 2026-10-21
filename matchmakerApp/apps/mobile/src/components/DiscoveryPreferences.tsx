@@ -7,7 +7,7 @@ import {
   type UserPreferences,
 } from '@match-makers/shared';
 
-import { SelectChips, Stepper, type ChipOption } from '@/components';
+import { AgeRangeField, SelectChips, Stepper, type ChipOption } from '@/components';
 import { APP_CONFIG, SPACING } from '@/constants';
 
 const GENDER_OPTIONS: ReadonlyArray<ChipOption<Gender>> = [
@@ -28,7 +28,6 @@ const DISTANCE_OPTIONS: ReadonlyArray<ChipOption<DistanceMode>> = [
   { value: 'global', label: 'Global' },
 ];
 
-const AGE_STEP = 5;
 const DISTANCE_STEP = 10;
 const MIN_DISTANCE = 5;
 
@@ -65,16 +64,6 @@ interface Props {
  */
 export function DiscoveryPreferences({ preferences, onChange, goalHelperText }: Props) {
   const isGlobal = preferences.distanceMode === 'global';
-
-  const adjustAge = (key: 'min' | 'max', delta: number) => {
-    const next = preferences.ageRange[key] + delta * AGE_STEP;
-    if (next < APP_CONFIG.MIN_AGE || next > APP_CONFIG.MAX_AGE) return;
-
-    const ageRange = { ...preferences.ageRange, [key]: next };
-    // Keep the range coherent rather than letting min cross over max.
-    if (ageRange.min >= ageRange.max) return;
-    onChange({ ...preferences, ageRange });
-  };
 
   const adjustDistance = (delta: number) => {
     const maxDistance = Math.min(
@@ -125,20 +114,10 @@ export function DiscoveryPreferences({ preferences, onChange, goalHelperText }: 
 
       <View style={styles.block}>
         <Text variant="labelLarge">Age range</Text>
-        <View style={styles.row}>
-          <Stepper
-            label="From"
-            value={`${preferences.ageRange.min}`}
-            onDecrease={() => adjustAge('min', -1)}
-            onIncrease={() => adjustAge('min', 1)}
-          />
-          <Stepper
-            label="To"
-            value={`${preferences.ageRange.max}`}
-            onDecrease={() => adjustAge('max', -1)}
-            onIncrease={() => adjustAge('max', 1)}
-          />
-        </View>
+        <AgeRangeField
+          value={preferences.ageRange}
+          onChange={(ageRange) => onChange({ ...preferences, ageRange })}
+        />
       </View>
 
       <SelectChips
@@ -169,7 +148,6 @@ export function DiscoveryPreferences({ preferences, onChange, goalHelperText }: 
 const styles = StyleSheet.create({
   container: { gap: SPACING.lg },
   block: { gap: SPACING.sm },
-  row: { flexDirection: 'row', gap: SPACING.md },
 });
 
 /** A short label for a preference set, for read-only surfaces. */

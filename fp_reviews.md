@@ -276,3 +276,191 @@ choose.
 top of the stack, which is what `activeIndex` was. The tile itself is `PersonTile`,
 shared with the Taste Profile grid, because a person should look like a person wherever
 the app shows them one.
+
+[FP6] 10/20/2026
+### Put the database we planned in FP2 in front of us instead of sketching around it.
+FP2 committed to Node/Express + PostgreSQL + Redis and every layer since has simulated
+it. `MockDatabase` is one AsyncStorage blob rewritten in full on every mutation, with
+passwords stored verbatim and its invariants enforced in application code one
+`Array.find` at a time. `apps/api/db/schema.sql` is that schema as real Postgres
+tables, and the demo is the thing the blob cannot do: the constraints hold whether or
+not anybody remembered to check.
+
+- 8 tables, 6 enums, no ORM. The model in `apps/shared` stays the source of truth and
+  Zod validates at the API boundary.
+- The rules moved from code into the database: a `Set` became
+  `UNIQUE (actor_id, target_user_id)`, a load-search-rewrite cycle became
+  `UNIQUE (user_id, post_id)` with `ON CONFLICT DO UPDATE`, a "my side" of a match row
+  became `CHECK (user_a_id < user_b_id)`, and a hand-written cascade became
+  `ON DELETE CASCADE`.
+- A minimal Express API on the paths the app already calls, scrypt passwords via
+  `node:crypto`, and the eligibility gate as one SQL statement applied in both
+  directions instead of a scan over every user in the client.
+- Still outstanding, and said so in the README: Redis, PostGIS, the client-side
+  compatibility score, and the fact that the API has no tests.
+
+### Then the app was pointed at it, and this is where most of the time went.
+- `EXPO_PUBLIC_AUTH_MODE=jwt`. Every screen runs its HTTP branch against `apps/api`
+  and Postgres; the mock is one variable away and the 461 tests still run on it.
+  `apiConnection.test.ts` drives the app's own services against a live server --
+  register, react, build a deck, match, message -- which answers "is it actually
+  connected?", a question that otherwise has no answer.
+- **The API moved to the app, not the other way round.** The HTTP branches had never
+  been executed and did not match the contract they were written against: the wrong
+  route for messages, `RegisterData` rather than `registerSchema`, `FeedPage` rather
+  than `Paginated<T>`. Twenty-odd call sites in working code outrank a route table
+  nobody had run, and one interceptor now unwraps the envelope so those sites keep
+  working.
+- Refresh tokens exist now, because `AuthTokens` has always required one. They rotate
+  on use and a replay revokes the whole family.
+- A trap worth recording: `babel-preset-expo` inlines `process.env.EXPO_PUBLIC_*` at
+  transform time, so pointing the app at the API silently turned all 28 screen suites
+  into tests trying to reach a real server. `jest.setup.ts` now pins the mock unless
+  `RUN_API_TESTS=1`.
+
+### Admin, because `DELETE /posts/:postId` had no authentication whatsoever
+Any anonymous request that knew the URL could delete a photo and cascade away its
+reactions, and no test caught it, because every test exercised the paths the app
+happened to call.
+
+- `users.is_admin`, set by a CLI (`npm run admin -- grant <email>`) rather than a
+  route: a `POST /admin/grant` would be reachable by anyone who could authenticate.
+- `requireAdmin` reads the flag per request, so revoking it takes effect immediately.
+  Anonymous gets 401, signed-in non-admin gets 403.
+- Two bugs found by tests written after the fact: `requireAdmin` was `async` and
+  unwrapped, so the first anonymous request to any `/admin` path killed the server; and
+  `GET /feed` dropped any candidate whose distance expression was NULL, so a viewer
+  who had not chosen a city became invisible to everyone who had.
+
+### The matching engine was not on the server at all
+`GET /feed` returned `tasteAffinity: 0` for every candidate and ordered by
+`created_at` -- registration order, not affinity.
+
+- The client's `scoreCompatibility` is transcribed into SQL, constants and all,
+  because a deck ordered one way and explained by another is a lie with two authors.
+  `user_tag_affinity` holds one row per person per tag, so changing your mind takes the
+  old opinion back rather than counting both.
+- **Recency:** `effective = (likes - dislikes) * exp(-age * ln(2) / half_life)`, 30-day
+  half-life, applied at read time rather than write time. A unit test caught that the
+  `ln(2)` was missing -- without it the stated 30 days was an e-folding, 0.37 rather
+  than 0.5.
+- **The ranking is a stored result.** Computing affinity live measured 569ms over
+  400,000 rows, paid on every feed request to answer a question that only changes when
+  somebody reacts. `npm run rescore` computes it into `match_scores`: 20ms over 2,000
+  candidates and 4,000,000 stored scores.
+- **Bands** 50 / 75 / 90, computed server-side. Aged evidence moves a pair across one:
+  fresh evidence scored 66, and at 60 days the same pair was 42.
+
+### Real-time messaging did not exist
+It is now a WebSocket at `/ws` over Postgres `LISTEN`/`NOTIFY`, which needs no new
+infrastructure, and the payload is a pointer rather than the message so there is still
+one source of truth. The first version delivered every message twice, because it both
+notified the database and handed the payload straight to the sockets.
+
+### The three gaps that were left, all of which were real
+- **The GIN index on `posts.tags` did nothing.** An index nothing uses is a write cost
+  with no benefit, so it needed a query or a deletion. It got the query -- a tag filter
+  on the photo library -- using `@>`, whose operands are not interchangeable. 0.38ms
+  with the index, 8.45ms without.
+- **The app did not consume the socket.** The client now owns one socket for the whole
+  app, with the access token in the query string because a browser cannot set headers
+  on a handshake. It is an optimisation and never the only way a message arrives: when
+  it is not connected the chat polls every five seconds and says so.
+- **The similarity measure was not cosine or Jaccard.** It divided the shared weight by
+  the smaller tag count, which said that somebody with two strong opinions and somebody
+  with two hundred were equally matched. It is now a cosine, in the server's SQL *and*
+  the client's `taste.ts`. Two people with the same taste now score 80 rather than 70,
+  which puts the 75% band within reach for the first time, and the curve is what the
+  spec asked for: 25, 38, 51, 66, 81, 83, 85, 86, 86, 87.
+
+### Image quality, which looked like "the upload lost its quality"
+The importer defaulted to 1200px, but the viewer renders at the full viewport width, so
+the photo was being *upscaled*. It is now sized from the display under a byte budget,
+up to 2880px, and profile photos go through the same path -- they used to be stored
+verbatim, and two of them were eighteen megabytes of the database.
+
+The real fix was a `srcset` problem, not a resizing one: one image cannot serve a 342px
+grid tile and a full-width viewer on a 2x display. `post_images` now holds a ladder of
+renditions (640 / 1280 / 2560 / full) and the app picks the smallest that is not
+smaller than display width times device pixel ratio. Writing the test for that rule
+caught the first implementation taking the *first* big-enough rung, which is the
+*largest* one and makes the ladder pointless. The honest limit: a 2720px photo is still
+soft on a 2560-point window at 2x. Only a higher-resolution source adds more pixels.
+
+[FP7]
+### This iteration fixes the matching weights and the logic behind them.
+FP5 made taste the ranking signal and left the other three signals worth 20 points
+between them. FP6 moved the same formula into SQL so the server could rank by it.
+Both are right about the ranking and neither fixed what the number means, so this
+iteration rewrites the rule itself rather than the code that implements it.
+
+The one-line version: **out of 100 points, 90 come from shared photo taste and 10
+from mutual orientation. Everything else decides who is in the deck at all, and the
+verified badge is a badge.**
+
+What is wrong with the weights today
+------------------------------------
+- **Goals are counted twice.** FP5 made relationship goals a hard gate in
+  `utils/eligibility.ts` and left 10 points for "how alike your goals are" in
+  `utils/matching.ts`. A pair that fails the goal gate never appears in the deck,
+  and a pair that passes it still gets partial credit for disagreeing about it. Age
+  and gender were taken out of the score in FP5 for exactly this reason -- "filtered
+  out *and* worth 20 points between them" -- and goals are still both. The ladder
+  itself (`long_term` 3, `short_term` 2, `casual` 1, `friendship` 1, `not_sure` 0)
+  is transcribed four times: client scorer, API rescore, API feed fallback, SQL goal
+  rank. That is why it never got simpler.
+- **Verified is worth 4 points and nobody has been verified.** `isVerified` is
+  self-declared: `POST /profile/verification` flips the flag and records the method
+  without checking a document. So the score pays 4 points for a badge the person
+  awarded themselves, one-directionally -- a verified stranger outranks an
+  unverified one with identical taste. It is a trust badge, not a measure of
+  compatibility, and it should not be worth points.
+- **Two band systems that disagree.** The card reads "Strong match" from 80
+  (`compatibilityLabel` in the app), the server badge reads `50+` / `75+` / `90+`, so
+  49 is "Worth a look" to the app and "below-50" to the server. The spec asked for
+  50 / 75 / 90, and there should be one table of thresholds somewhere.
+- **The API invents a score on a different scale.** The feed falls back to "the
+  stated facts" for anyone the rescore has not reached: 10 goal + 6 orientation + 4
+  verified, out of 20, shown in the same UI as a score out of 100. That is the
+  "11% match" card FP5 deleted from the app, rebuilt on the server.
+- **The deck order is stale.** `match_scores` only changes when `npm run rescore`
+  runs, so the app's own promise -- "your deck reorders as you go" -- is true in
+  mock mode and false against the API, where the client recomputes and the server
+  does not.
+
+The rule we are moving to
+-------------------------
+- **Taste 90, mutual orientation 10, nothing else.** Goals, age, gender and distance
+  are gates and stay gates: a pair that fails one is not in the deck, so scoring it
+  as well would pay twice for the same rule. Orientation keeps some points because it
+  is not a preference anybody gets to impose on a stranger, and 10 keeps it visible
+  without letting it outvote shared taste.
+- **One definition, in `apps/shared`.** The weights, the bands (50 / 75 / 90) and the
+  words on the card live in the shared package and are imported by the app and by the
+  API. The taste constants (`CO_LIKE_SHARE`, `TAG_SHARE`, `CONFIDENCE_MIN_LIKES`,
+  `CO_LIKE_SATURATION`, `PHOTOS_FOR_FULL_TASTE`) are transcribed on both sides today,
+  and the goal ladder is transcribed four times. The ladder is deleted rather than
+  centralised, because a gate does not need a ladder.
+- **No evidence, no number.** A pair with nothing shared scores 0 and says so, and a
+  candidate nobody has rescored shows "not scored yet" rather than a number out of 20.
+- **One ordering, and it is fresh.** The deck is ordered by the same function the
+  card explains, and reacting re-ranks you there and then rather than waiting for a
+  batch.
+
+Where it lands
+--------------
+- `apps/shared/src/matching.ts` holds `MATCH_WEIGHTS`, `MATCH_BANDS` and the label for
+  a score. The app's `utils/matching.ts` and the API's `src/matching.ts` import them,
+  and their own copies go away.
+- `utils/eligibility.ts` does not change. It already does the gating, and this leaves
+  it alone rather than moving it.
+- `apps/api/src/routes/feed.ts` loses the fallback score. `match_scores` is the only
+  source of a percentage, and a candidate with no row is "not scored yet".
+- A reaction rescores the person who reacted, so "your deck reorders as you go" is
+  true against the API and not only in mock mode.
+- One table-driven test pins the client scorer and the server SQL to the same numbers
+  for the same inputs. That is the drift check this has been missing since FP6
+  copied the formula rather than sharing it.
+- Not built: real verification, so the badge still means nothing and now only says
+  it; a background worker, so other people's decks still wait for the next batch; and
+  any tuning of the numbers against real data, because there is none yet.

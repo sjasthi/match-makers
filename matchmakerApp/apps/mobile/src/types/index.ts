@@ -17,6 +17,15 @@ export type { AuthMode, SessionState };
 export interface DeckCandidate {
   user: User;
   compatibility: CompatibilityBreakdown;
+  /**
+   * Which band the percentage falls into: `90+`, `75+`, `50+` or `below-50`.
+   *
+   * Optional, and deliberately so. The server computes the band from the score
+   * it stored, and mock mode has no stored score to band -- so a card that
+   * assumed a band would show one in mock mode and not in the real app, which is
+   * worse than showing none.
+   */
+  band?: string;
 }
 
 export interface FeedPage {

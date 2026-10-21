@@ -13,7 +13,11 @@ import { ProfileImage } from './ProfileImage';
 import type { User } from '@match-makers/shared';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import { ageFromDateOfBirth } from '@/utils/mockData';
-import { compatibilityLabel, scoreCompatibility, type CompatibilityBreakdown } from '@/utils/matching';
+import {
+  compatibilityLabel,
+  scoreCompatibility,
+  type CompatibilityBreakdown,
+} from '@/utils/matching';
 import { distanceBetween } from '@/utils/eligibility';
 import { formatDistance } from '@/utils/distance';
 
@@ -37,6 +41,14 @@ interface Props {
    * a card in isolation, and it is why the product path passes this explicitly.
    */
   compatibility?: CompatibilityBreakdown;
+  /**
+   * The band the score falls into, when the server supplied one.
+   *
+   * Only the strong bands are shown. `50+` on a card that already says "50%" is
+   * saying the same thing twice, and `below-50` is a thing to say about a
+   * stranger, not about the person in front of you.
+   */
+  band?: string;
 }
 
 /**
@@ -66,6 +78,7 @@ export const SwipeCard = memo(function SwipeCard({
   onOpenDetail,
   enabled = true,
   compatibility: scored,
+  band,
 }: Props) {
   const position = useRef(new Animated.ValueXY()).current;
   const compatibility = scored ?? scoreCompatibility(viewer, user);
@@ -199,6 +212,16 @@ export const SwipeCard = memo(function SwipeCard({
                   Same goal
                 </Chip>
               ) : null}
+              {band && band !== '50+' && band !== 'below-50' ? (
+                <Chip
+                  compact
+                  style={styles.tasteChip}
+                  textStyle={styles.tasteText}
+                  testID="swipe-card-band-chip"
+                >
+                  {band === '90+' ? 'Top match' : 'Strong match'}
+                </Chip>
+              ) : null}
               {compatibility.tasteAffinity > 0 ? (
                 <Chip
                   compact
@@ -214,7 +237,6 @@ export const SwipeCard = memo(function SwipeCard({
                 </Chip>
               ) : null}
             </View>
-
           </View>
         </LinearGradient>
 

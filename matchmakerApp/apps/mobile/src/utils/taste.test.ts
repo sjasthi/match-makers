@@ -34,10 +34,7 @@ const MUSIC = post('p_music', 'music');
 
 describe('tasteBetween', () => {
   it('scores two strangers with no shared reaction at zero', () => {
-    const index = buildTasteIndex([like('me', 'p_food'), like('them', 'p_cat')], [
-      CAT,
-      FOOD,
-    ]);
+    const index = buildTasteIndex([like('me', 'p_food'), like('them', 'p_cat')], [CAT, FOOD]);
 
     const signal = tasteBetween(index, 'me', 'them');
 
@@ -56,9 +53,7 @@ describe('tasteBetween', () => {
     const signal = tasteBetween(index, 'me', 'them');
 
     expect(signal.coLikedPosts).toBe(2);
-    expect(signal.sharedTags).toEqual(
-      expect.arrayContaining(['pets', 'animals', 'food'])
-    );
+    expect(signal.sharedTags).toEqual(expect.arrayContaining(['pets', 'animals', 'food']));
     expect(signal.affinity).toBeGreaterThan(0);
   });
 
@@ -66,7 +61,13 @@ describe('tasteBetween', () => {
     // The exact case the feature is for: me on the cat post, them on the dog
     // post, no photo in common. They agree on pets without agreeing on a photo.
     const index = buildTasteIndex(
-      [like('me', 'p_cat'), like('them', 'p_dog'), like('me', 'p_food'), like('me', 'p_music'), like('me', 'p_cat')],
+      [
+        like('me', 'p_cat'),
+        like('them', 'p_dog'),
+        like('me', 'p_food'),
+        like('me', 'p_music'),
+        like('me', 'p_cat'),
+      ],
       [CAT, DOG, FOOD, MUSIC]
     );
 
@@ -81,7 +82,13 @@ describe('tasteBetween', () => {
   it('beats a shared tag with a co-like given the same evidence volume', () => {
     const tagOnly = tasteBetween(
       buildTasteIndex(
-        [like('me', 'p_cat'), like('them', 'p_dog'), like('me', 'p_food'), like('me', 'p_music'), like('me', 'p_food')],
+        [
+          like('me', 'p_cat'),
+          like('them', 'p_dog'),
+          like('me', 'p_food'),
+          like('me', 'p_music'),
+          like('me', 'p_food'),
+        ],
         [CAT, DOG, FOOD, MUSIC]
       ),
       'me',
@@ -89,7 +96,13 @@ describe('tasteBetween', () => {
     );
     const coLike = tasteBetween(
       buildTasteIndex(
-        [like('me', 'p_cat'), like('them', 'p_cat'), like('me', 'p_food'), like('me', 'p_music'), like('me', 'p_food')],
+        [
+          like('me', 'p_cat'),
+          like('them', 'p_cat'),
+          like('me', 'p_food'),
+          like('me', 'p_music'),
+          like('me', 'p_food'),
+        ],
         [CAT, DOG, FOOD, MUSIC]
       ),
       'me',
@@ -120,9 +133,7 @@ describe('tasteBetween', () => {
   });
 
   it('saturates: each extra shared photo matters less than the first', () => {
-    const posts = Array.from({ length: 12 }, (_, index) =>
-      post(`p_${index}`, 'pets')
-    );
+    const posts = Array.from({ length: 12 }, (_, index) => post(`p_${index}`, 'pets'));
     const shared = posts.slice(0, 6);
     const rest = posts.slice(6, 12);
 
@@ -130,7 +141,9 @@ describe('tasteBetween', () => {
     // fills its quota from posts the other has not seen.
     const build = (sharedCount: number) => {
       const reactions = [
-        ...shared.slice(0, sharedCount).flatMap((item) => [like('me', item.id), like('them', item.id)]),
+        ...shared
+          .slice(0, sharedCount)
+          .flatMap((item) => [like('me', item.id), like('them', item.id)]),
         ...rest.slice(0, 4).flatMap((item) => [like('me', item.id), like('them', item.id)]),
       ];
       return buildTasteIndex(reactions, posts);
@@ -202,12 +215,7 @@ describe('tasteBetween', () => {
   });
 
   it('counts tags rather than posts toward breadth', () => {
-    const posts = [
-      CAT,
-      DOG,
-      post('p_food', 'food'),
-      post('p_music', 'music'),
-    ];
+    const posts = [CAT, DOG, post('p_food', 'food'), post('p_music', 'music')];
     // Me: two opinions (pets, food). Them: four (pets, animals, food, music).
     // Containment not union, so the narrower side is not punished for it.
     const index = buildTasteIndex(
@@ -234,10 +242,10 @@ describe('tasteBetween', () => {
 
 describe('opinionsFor', () => {
   it('reports a tag as partly positive, never fully certain', () => {
-    const index = buildTasteIndex([like('me', 'p_cat'), like('me', 'p_food'), dislike('me', 'p_cat')], [
-      CAT,
-      FOOD,
-    ]);
+    const index = buildTasteIndex(
+      [like('me', 'p_cat'), like('me', 'p_food'), dislike('me', 'p_cat')],
+      [CAT, FOOD]
+    );
 
     const pets = opinionsFor(index, 'me').find((entry) => entry.tag === 'pets');
     const food = opinionsFor(index, 'me').find((entry) => entry.tag === 'food');
@@ -319,5 +327,83 @@ describe('closestByTaste', () => {
     ]);
 
     expect(result).toHaveLength(2);
+  });
+});
+/*
+ * The curve.
+ *
+ * The verification question is whether the match percentage moves *smoothly* as
+ * the evidence accumulates -- whether liking one more photo moves the number a
+ * little, and liking one more after that moves it less, rather than the number
+ * jumping or going backwards.
+ *
+ * The measurements below are the shape of the algorithm as it stands. They are
+ * not a copy of the implementation: they are what the implementation is
+ * measured against, so a change that made the curve jumpy or non-monotonic
+ * would fail here.
+ */
+describe('the affinity curve', () => {
+  /** Both people like the same n photos, and have n likes each. */
+  function curve(n: number): { affinity: number; coLiked: number } {
+    const posts = Array.from({ length: n }, (_, i) => post(`p${i}`, 'pets', 'outdoor'));
+    const reactions = [
+      ...posts.map((p) => like('me', p.id)),
+      ...posts.map((p) => like('them', p.id)),
+    ];
+    const signal = tasteBetween(buildTasteIndex(reactions, posts), 'me', 'them');
+    return { affinity: signal.affinity, coLiked: signal.coLikedPosts };
+  }
+
+  it('rises smoothly and monotonically as shared photos accumulate', () => {
+    const points = [1, 2, 3, 4, 6, 8, 12, 20, 40].map((n) => ({ n, ...curve(n) }));
+
+    for (let i = 1; i < points.length; i += 1) {
+      const previous = points[i - 1]!;
+      const current = points[i]!;
+
+      // Never goes backwards.
+      expect(current.affinity).toBeGreaterThanOrEqual(previous.affinity);
+      // And does go forwards, so it is not flat.
+      expect(current.affinity).toBeGreaterThan(previous.affinity);
+    }
+  });
+
+  it('each extra shared photo matters less than the one before it', () => {
+    // The saturation that stops a prolific pair from running away with the score.
+    const first = curve(1).affinity - curve(0).affinity;
+    const tenth = curve(10).affinity - curve(9).affinity;
+
+    expect(first).toBeGreaterThan(tenth);
+  });
+
+  it('stays below 1 at any realistic volume of evidence', () => {
+    // The underlying value is `n / (n + 2)`, which never reaches 1, so the
+    // specific and broad halves can always both contribute.
+    expect(curve(100).affinity).toBeLessThan(1);
+    expect(curve(200).affinity).toBeLessThan(1);
+  });
+
+  it('rounds to 1 once the evidence is absurd, which is a display choice', () => {
+    /*
+     * Worth recording rather than asserting as a rule.
+     *
+     * The signal is rounded to two decimals, and the two halves stop being
+     * distinguishable somewhere around four hundred shared photos -- the
+     * underlying value is 0.995 and rounds to 1.00. The comment in `taste.ts`
+     * says the saturation "never reaches 1", which is true of the arithmetic and
+     * not of the number that gets shown.
+     *
+     * It is harmless in practice: two people who have liked four hundred of the
+     * same photos are as close as the scale can express. But the claim in the
+     * source is about the arithmetic, and the number on screen is rounded, and
+     * only one of those is true at high volumes.
+     */
+    expect(curve(400).affinity).toBe(1);
+  });
+
+  it('reports how much of the pair the shared photos account for', () => {
+    // The specific half saturates as n/(n+2); the broad half is what is left.
+    expect(curve(2).coLiked).toBe(2);
+    expect(curve(2).affinity).toBeGreaterThan(0);
   });
 });

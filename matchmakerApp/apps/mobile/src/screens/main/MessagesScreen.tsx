@@ -7,6 +7,7 @@ import { ScreenContainer, Avatar, EmptyState, LoadingState, ErrorBanner } from '
 import { useMatches } from '@/hooks';
 import { markConversationRead } from '@/services/matches';
 import { useDebouncedValue } from '@/hooks/useAsync';
+import { useRealtimeMessages } from '@/hooks/useRealtime';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { RootStackParamList } from '@/navigation/types';
 
@@ -36,6 +37,21 @@ export function MessagesScreen() {
       void load({ refresh: true });
     }, [load])
   );
+
+  /*
+   * A message arriving anywhere refreshes the list.
+   *
+   * The conversation list shows the other person's name, the last line of the
+   * conversation and an unread badge, so a message that has landed changes all
+   * three. Watching every conversation rather than one is the point: this
+   * screen does not know which conversation a message belongs to until the
+   * server says so.
+   */
+  const onMessage = useCallback(() => {
+    void load({ refresh: true });
+  }, [load]);
+
+  useRealtimeMessages(undefined, onMessage);
 
   const openChat = useCallback(
     async (matchId: string, name: string, avatarUri: string | null) => {

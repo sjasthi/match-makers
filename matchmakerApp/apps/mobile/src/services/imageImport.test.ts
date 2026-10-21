@@ -2,7 +2,14 @@ import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
-import { pickImages, importSizeWidth, IMPORT_SIZES, DEFAULT_IMPORT_SIZE } from './imageImport';
+import {
+  pickImages,
+  importSizeWidth,
+  IMPORT_SIZES,
+  DEFAULT_IMPORT_SIZE,
+  initialWidth,
+  narrowedWidth,
+} from './imageImport';
 
 jest.mock('expo-image-picker', () => ({
   MediaTypeOptions: { Images: 'Images' },
@@ -58,19 +65,30 @@ beforeEach(() => {
 });
 
 describe('target sizes', () => {
-  it('offers the widths the app actually renders at', () => {
-    expect(IMPORT_SIZES.map((size) => size.width)).toEqual([640, 1200, 2048]);
+  it('offers automatic sizing first, then explicit caps', () => {
+    // `auto` is the default and the point: it keeps as much of the original as
+    // fits the byte budget, so the full-screen viewer is not upscaling a photo
+    // that was shrunk for a screen nobody is looking at. The fixed sizes remain
+    // as explicit caps for somebody who wants the storage back.
+    expect(IMPORT_SIZES.map((size) => size.id)).toEqual(['auto', 'grid', 'feed', 'large']);
+    expect(IMPORT_SIZES.map((size) => size.width)).toEqual([4096, 640, 1200, 2048]);
   });
 
-  it('defaults to the full-screen width rather than the grid one', () => {
-    // The grid tile is a third of the card, so importing at grid size would
-    // make the full-screen viewer soft. Feed is the one that has to work.
-    expect(importSizeWidth(DEFAULT_IMPORT_SIZE)).toBe(1200);
+  it('defaults to automatic rather than to a fixed width', () => {
+    // It used to default to 1200. On any display wider than 1200 CSS pixels --
+    // that is, any laptop -- the full-screen viewer renders the photo at the
+    // full viewport width and therefore upscales a 1200px source, which is
+    // what made the photo look soft when opened from the landing page.
+    //
+    // 4096 now, which is what a 2048-point window needs on a 2x display. It
+    // was 2880, which only covered a 1440-point window.
+    expect(DEFAULT_IMPORT_SIZE).toBe('auto');
+    expect(importSizeWidth(DEFAULT_IMPORT_SIZE)).toBe(4096);
   });
 
-  it('falls back to the default for an unknown id', () => {
+  it('falls back to the widest for an unknown id', () => {
     // A stored preference could outlive a preset being renamed.
-    expect(importSizeWidth('nonsense' as never)).toBe(1200);
+    expect(importSizeWidth('nonsense' as never)).toBe(4096);
   });
 });
 
@@ -379,5 +397,35 @@ describe('on web', () => {
     // Reading the file back just to fill in a label would mean opening every
     // imported image a second time.
     expect(image?.bytes).toBeUndefined();
+  });
+});
+
+describe('automatic sizing', () => {
+  it('never asks for more pixels than the source has', () => {
+    // Asking for more than the source has would upscale it: a larger file and a
+    // blurrier picture.
+    expect(initialWidth(4000, 2880)).toBe(2880);
+    expect(initialWidth(1200, 2880)).toBe(1200);
+    // A picker that reports no width is treated as small, for the same reason.
+    expect(initialWidth(0, 2880)).toBe(2880);
+  });
+
+  it('narrows the width when the encoded image busts the budget', () => {
+    // 2MB of image, 1.5MB budget. JPEG size scales with area, so the width
+    // factor is the square root of the byte ratio.
+    const next = narrowedWidth(2880, 2_000_000, 1_500_000, 640);
+    expect(next).not.toBeNull();
+    expect(next!).toBeLessThan(2880);
+    expect(next!).toBeGreaterThanOrEqual(640);
+  });
+
+  it('leaves the width alone when the image already fits', () => {
+    expect(narrowedWidth(2880, 900_000, 1_500_000, 640)).toBeNull();
+  });
+
+  it('stops rather than shrinking past what a tile needs', () => {
+    // Already at the floor, and still over budget: there is nowhere to go, so
+    // another attempt would only burn time re-encoding.
+    expect(narrowedWidth(640, 9_000_000, 1_500_000, 640)).toBeNull();
   });
 });

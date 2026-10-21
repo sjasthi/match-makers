@@ -6,6 +6,7 @@ import type { Post } from '@match-makers/shared';
 
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import { postColor, tagColor, tagGlyph, tagLabel } from '@/utils/interests';
+import { pickVariant, windowWidth } from '@/utils/images';
 
 interface Props {
   post: Post;
@@ -30,12 +31,6 @@ interface Props {
 export function PhotoPostCard({ post, testID }: Props) {
   const [failed, setFailed] = useState(false);
 
-  // A post that arrives after a previous one failed should get a fresh attempt
-  // rather than inherit its failure, or the rest of the feed renders as tiles.
-  useEffect(() => {
-    setFailed(false);
-  }, [post.imageUri]);
-
   const primary = post.tags[0];
   const secondary = post.tags.slice(1);
 
@@ -54,17 +49,32 @@ export function PhotoPostCard({ post, testID }: Props) {
   // before, so seeded posts look unchanged.
   const ratio = post.width && post.height ? post.width / post.height : null;
 
+  // The rendition the viewer needs.
+  //
+  // The viewer is full-screen, so it wants the whole window's width times the
+  // device pixel ratio -- which on a 2x display is several times the CSS width.
+  // Picking the ladder entry that covers that is what stops the photo being
+  // stretched.
+  const uri = pickVariant(post, windowWidth());
+
+  // A post that arrives after a previous one failed should get a fresh attempt
+  // rather than inherit its failure, or the rest of the feed renders as tiles.
+  //
+  // Keyed on the chosen rendition rather than on `post.imageUri`, because a
+  // window resize changes which rendition is chosen and the image should get a
+  // fresh attempt when it does.
+  useEffect(() => {
+    setFailed(false);
+  }, [uri]);
+
   return (
     <View
-      style={[
-        styles.card,
-        ratio ? [styles.cardSized, { aspectRatio: ratio }] : styles.cardFill,
-      ]}
+      style={[styles.card, ratio ? [styles.cardSized, { aspectRatio: ratio }] : styles.cardFill]}
       testID={testID}
     >
-      {post.imageUri && !failed ? (
+      {uri && !failed ? (
         <Image
-          source={{ uri: post.imageUri }}
+          source={{ uri }}
           style={styles.image}
           // `contain` only when the box is known to match. With the ratio
           // applied the two modes agree, but sub-pixel rounding can still shave
@@ -77,7 +87,10 @@ export function PhotoPostCard({ post, testID }: Props) {
         />
       ) : (
         <View
-          style={[styles.tile, { backgroundColor: primary ? postColor(post.tags) : COLORS.surfaceVariant }]}
+          style={[
+            styles.tile,
+            { backgroundColor: primary ? postColor(post.tags) : COLORS.surfaceVariant },
+          ]}
           testID={testID ? `${testID}-tile` : undefined}
         >
           {/* The glyph stands in for the picture the prototype does not ship.

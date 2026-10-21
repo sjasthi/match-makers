@@ -9,13 +9,19 @@ import type {
 
 /**
  * How the app proves who it is.
- * - `mock`    local in-memory backend, no server needed
- * - `jwt`     Authorization header + refresh token rotation
- * - `session` HttpOnly cookie session, requests sent with credentials
+ * - `mock` local in-memory backend, no server needed
+ * - `jwt`  Authorization header + refresh token rotation, against `apps/api`
+ *
+ * `session` (HttpOnly cookie) used to be a third option and has been removed.
+ * The API never implemented cookies -- no `Set-Cookie`, no session middleware --
+ * so selecting it could only ever produce a login that fails with no
+ * explanation. Leaving a mode in the switcher that is 100% broken is worse than
+ * not offering it, and the type no longer admits it, so it cannot creep back in
+ * at a call site.
  */
-export type AuthMode = 'mock' | 'jwt' | 'session';
+export type AuthMode = 'mock' | 'jwt';
 
-export const AUTH_MODES: readonly AuthMode[] = ['mock', 'jwt', 'session'];
+export const AUTH_MODES: readonly AuthMode[] = ['mock', 'jwt'];
 
 /**
  * Everything the HTTP layer needs to know about auth. The API client depends

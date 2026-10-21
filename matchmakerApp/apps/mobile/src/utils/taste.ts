@@ -105,7 +105,10 @@ function tagScore(likes: number, dislikes: number): number {
   return (likes - dislikes) / (likes + dislikes + 1);
 }
 
-export function buildTasteIndex(reactions: PostReaction[], posts: Pick<Post, 'id' | 'tags'>[]): TasteIndex {
+export function buildTasteIndex(
+  reactions: PostReaction[],
+  posts: Pick<Post, 'id' | 'tags'>[]
+): TasteIndex {
   const tagsByPost = new Map<string, string[]>();
   for (const post of posts) tagsByPost.set(post.id, post.tags);
 
@@ -170,17 +173,38 @@ function coLikeOverlap(n: number): number {
  * away is not a shared interest, and counting it would pair two people on the
  * one subject they demonstrably disagree about.
  *
- * The denominator is `min(tagsA, tagsB)` rather than the union. Somebody who
- * likes cats and cooking has two strong opinions and should not be punished for
- * not having twelve; under a union denominator a selective user could never
- * score highly, which is exactly backwards.
+ * The measure is **cosine similarity**: the shared weight divided by the length
+ * of each person's whole positive vector. The server uses the same measure --
+ * `apps/api/src/matching.ts` -- because a deck ordered by one similarity and
+ * explained by another is a lie with two authors.
+ *
+ * It replaces a normalisation that divided the shared weight by the smaller of
+ * the two tag counts. That said somebody with two strong opinions and somebody
+ * with two hundred were equally matched on the two they had in common, which
+ * is the same as saying the broad taste and the narrow one were identical.
+ * Cosine prices the difference: the shared weight is the same, but the
+ * denominator is not, so a narrow taste that lands entirely inside a broad one
+ * does not score as high as two matching tastes do.
+ *
+ * Cosine is bounded in [0, 1] for non-negative vectors without a clamp, so the
+ * `Math.min` here is a guard against floating point rather than a real
+ * saturation.
  */
 function tagOverlap(
   mine: Map<string, TagOpinion>,
   theirs: Map<string, TagOpinion>
 ): { ratio: number; shared: string[] } {
   let earned = 0;
+  let mineNorm = 0;
+  let theirsNorm = 0;
   const shared: string[] = [];
+
+  for (const opinion of mine.values()) {
+    if (opinion.score > 0) mineNorm += opinion.score * opinion.score;
+  }
+  for (const opinion of theirs.values()) {
+    if (opinion.score > 0) theirsNorm += opinion.score * opinion.score;
+  }
 
   for (const [tag, myOpinion] of mine) {
     if (myOpinion.score <= 0) continue;
@@ -191,10 +215,12 @@ function tagOverlap(
     earned += myOpinion.score * theirOpinion.score;
   }
 
-  if (shared.length === 0) return { ratio: 0, shared };
+  if (shared.length === 0 || mineNorm === 0 || theirsNorm === 0) {
+    return { ratio: 0, shared };
+  }
 
-  const breadth = Math.min(mine.size, theirs.size);
-  return { ratio: Math.min(1, earned / Math.max(1, breadth)), shared };
+  const ratio = Math.min(1, earned / Math.sqrt(mineNorm * theirsNorm));
+  return { ratio, shared };
 }
 
 /**

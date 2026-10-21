@@ -8,6 +8,13 @@ export interface PersonTileProps {
   name: string;
   /** The deck's own number, 0-100. One meaning for the word "match" app-wide. */
   score: number;
+  /**
+   * The band the score falls into, when the server supplied one.
+   *
+   * Optional so the mock has nothing to show and the real app does. Only the
+   * strong bands are worth a badge: the percentage is already on the tile.
+   */
+  band?: string;
   /** The checkable sentence under the percentage, or null with nothing shared. */
   reason?: string | null;
   onPress: () => void;
@@ -29,7 +36,15 @@ export interface PersonTileProps {
  * UI. The reason goes under it because a percentage a person cannot check is a
  * number they have to take on faith.
  */
-export function PersonTile({ userId, name, score, reason, onPress, testPrefix }: PersonTileProps) {
+export function PersonTile({
+  userId,
+  name,
+  score,
+  reason,
+  band,
+  onPress,
+  testPrefix,
+}: PersonTileProps) {
   return (
     <Pressable
       onPress={onPress}
@@ -38,11 +53,7 @@ export function PersonTile({ userId, name, score, reason, onPress, testPrefix }:
       style={styles.tile}
       testID={`${testPrefix}-${userId}`}
     >
-      <ProfileImage
-        user={{ id: userId, name }}
-        initialsScale={0.34}
-        style={styles.avatar}
-      />
+      <ProfileImage user={{ id: userId, name }} initialsScale={0.34} style={styles.avatar} />
 
       <Text variant="titleSmall" style={styles.name} numberOfLines={1}>
         {name}
@@ -51,6 +62,12 @@ export function PersonTile({ userId, name, score, reason, onPress, testPrefix }:
       <Text variant="titleMedium" style={styles.score}>
         {score}%
       </Text>
+
+      {band && band !== '50+' && band !== 'below-50' ? (
+        <Text variant="labelSmall" style={styles.band} testID={`${testPrefix}-${userId}-band`}>
+          {band === '90+' ? 'Top match' : 'Strong match'}
+        </Text>
+      ) : null}
 
       {/* Omitted rather than shown blank. A card with no reason is a real state
           — nothing shared yet — and an empty line would read as a broken one. */}
@@ -79,6 +96,7 @@ const styles = StyleSheet.create({
   avatar: { width: 56, height: 56, borderRadius: 28 },
   name: { color: COLORS.text },
   score: { color: COLORS.primary, fontWeight: '700' },
+  band: { color: COLORS.secondaryDark, fontWeight: '700' },
   reason: { color: COLORS.textSecondary, fontSize: FONT_SIZES.xs },
 });
 

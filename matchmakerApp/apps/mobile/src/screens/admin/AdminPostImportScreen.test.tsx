@@ -23,6 +23,26 @@ jest.mock('@/services/imageImport', () => {
   return { ...actual, pickImages: jest.fn() };
 });
 
+/**
+ * The navigator's `useNavigation`, mocked.
+ *
+ * `react-native-screens` attaches a screen to a native container, and in the
+ * test environment re-attaching one -- which happens when the screen's contents
+ * change -- drops it out of the navigation context. The symptom is a
+ * "Couldn't find a navigation context" error thrown by a re-render that did
+ * nothing more than shorten a list.
+ *
+ * The screen under test never navigates except to go back after an import, so
+ * the mock only has to be there.
+ */
+jest.mock('@react-navigation/native', () => {
+  const actual = jest.requireActual('@react-navigation/native');
+  return {
+    ...actual,
+    useNavigation: () => ({ goBack: jest.fn(), navigate: jest.fn() }),
+  };
+});
+
 const pick = pickImages as jest.MockedFunction<typeof pickImages>;
 
 /**
@@ -45,9 +65,31 @@ function renderAdmin() {
   );
 }
 
+/**
+ * The screen with no navigator at all.
+ *
+ * `useNavigation` is mocked above, so the screen does not need one -- but the
+ * navigator itself re-attaches a screen whose contents change, and in the test
+ * environment that re-attachment loses the navigation context. It showed up as
+ * a `Couldn't find a navigation context` error thrown by a re-render that had
+ * only shortened a list, which read as a bug in the screen.
+ *
+ * Removing a photo is exactly such a re-render, so the tests that do it are
+ * rendered without a navigator.
+ */
+function renderPlain() {
+  return render(<AdminPostImportScreen />);
+}
+
 /** A picked image as the importer returns one, already scaled. */
 function image(width: number, resized: boolean, bytes?: number): PickedImage {
-  return { uri: `file:///cache/${width}.jpg`, width, height: Math.round(width * 0.75), resized, bytes };
+  return {
+    uri: `file:///cache/${width}.jpg`,
+    width,
+    height: Math.round(width * 0.75),
+    resized,
+    bytes,
+  };
 }
 
 beforeEach(async () => {
@@ -90,15 +132,20 @@ describe('choosing an import size', () => {
     );
   });
 
-  it('defaults to the feed width when nothing is chosen', async () => {
+  it('defaults to automatic sizing when nothing is chosen', async () => {
     pick.mockResolvedValue([image(1200, true)]);
     renderAdmin();
 
     await waitFor(() => expect(screen.getByText('Choose up to 12 photos')).toBeTruthy());
     fireEvent.press(screen.getByTestId('admin-import-choose'));
 
+    // `auto`, not a fixed width. A fixed default had to be small enough for the
+    // oldest phone, which made the full-screen viewer upscale the photo on any
+    // laptop -- the thing that made imported photos look soft when opened from
+    // the landing page. `auto` keeps as much of the original as fits the byte
+    // budget instead.
     await waitFor(() =>
-      expect(pick).toHaveBeenCalledWith(expect.any(Number), 'feed', expect.any(Function))
+      expect(pick).toHaveBeenCalledWith(expect.any(Number), 'auto', expect.any(Function))
     );
   });
 
@@ -114,7 +161,9 @@ describe('choosing an import size', () => {
     // applying a new size to nothing is how an admin ends up with a library at
     // two different resolutions without knowing.
     fireEvent.press(screen.getByText('Grid · 640 px'));
-    await waitFor(() => expect(screen.getByText(/Choose different photos to apply 640 px/)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText(/Choose different photos to apply 640 px/)).toBeTruthy()
+    );
   });
 });
 
@@ -269,5 +318,75 @@ describe('what actually gets stored', () => {
     // which is worse than falling back to the full image.
     expect(post).toBeDefined();
     expect('thumbUri' in (post as object)).toBe(false);
+  });
+});
+
+describe('looking at a photo before it is imported', () => {
+  /*
+   * Looking at a photo before it is imported, and taking it back out.
+   *
+   * Both were missing: the batch was a strip of 90-point thumbnails with no way
+   * to see any of them properly and no way to remove one, so a mis-picked photo
+   * could only be dealt with by picking the whole batch again.
+   */
+  it('opens a picked photo full size', async () => {
+    pick.mockResolvedValue([image(1200, true), image(800, false)]);
+    renderAdmin();
+
+    await waitFor(() => expect(screen.getByText('Choose up to 12 photos')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('admin-import-choose'));
+
+    await waitFor(() => expect(screen.getByTestId('admin-import-preview-0')).toBeTruthy());
+    expect(screen.getByTestId('admin-import-preview-1')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('admin-import-preview-0'));
+
+    expect(screen.getByTestId('admin-import-viewer')).toBeTruthy();
+    expect(screen.getByText(/Photo 1 of 2/)).toBeTruthy();
+  });
+
+  it('removes a photo from the batch without touching the rest', async () => {
+    pick.mockResolvedValue([image(1200, true), image(800, false), image(600, false)]);
+    renderPlain();
+
+    await waitFor(() => expect(screen.getByText('Choose up to 12 photos')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('admin-import-choose'));
+
+    await waitFor(() => expect(screen.getByTestId('admin-import-preview-2')).toBeTruthy());
+    expect(screen.getAllByTestId(/^admin-import-preview-/)).toHaveLength(3);
+
+    // The cross on the thumbnail, without opening it.
+    //
+    // Identified by the width in its label rather than by its position: the
+    // positions shift when a photo is removed, so "index 1" would be a
+    // different photo by the time the assertion ran.
+    fireEvent.press(screen.getByLabelText(/Remove photo 2 of 3, 800px wide/));
+
+    await waitFor(() => expect(screen.getAllByTestId(/^admin-import-preview-/)).toHaveLength(2));
+
+    // The one that was removed is gone, and the other two are untouched.
+    expect(screen.queryByLabelText(/800px wide/)).toBeNull();
+    expect(screen.getByLabelText(/1200px wide/)).toBeTruthy();
+    expect(screen.getByLabelText(/600px wide/)).toBeTruthy();
+  });
+
+  it('removes a photo from the full-size view', async () => {
+    pick.mockResolvedValue([image(1200, true), image(800, false)]);
+    renderPlain();
+
+    await waitFor(() => expect(screen.getByText('Choose up to 12 photos')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('admin-import-choose'));
+
+    await waitFor(() => expect(screen.getByTestId('admin-import-preview-0')).toBeTruthy());
+    expect(screen.getAllByTestId(/^admin-import-preview-/)).toHaveLength(2);
+
+    fireEvent.press(screen.getByTestId('admin-import-preview-0'));
+    fireEvent.press(screen.getByTestId('admin-import-viewer-action-remove-from-import'));
+
+    await waitFor(() => expect(screen.getAllByTestId(/^admin-import-preview-/)).toHaveLength(1));
+
+    // The one that was removed is gone, and the other is untouched.
+    expect(screen.queryByLabelText(/1200px wide/)).toBeNull();
+    expect(screen.getByLabelText(/800px wide/)).toBeTruthy();
   });
 });

@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text, Divider } from 'react-native-paper';
 import type { RouteProp } from '@react-navigation/native';
 import { useRoute } from '@react-navigation/native';
 import type { User } from '@match-makers/shared';
-import { ScreenContainer, EmptyState, AppIcon, ProfileImage } from '@/components';
+import {
+  ScreenContainer,
+  EmptyState,
+  ErrorBanner,
+  AppIcon,
+  ProfileImage,
+  PhotoViewer,
+} from '@/components';
 import { mockDb } from '@/services/mock/database';
 import { getAuthAdapter } from '@/services/auth';
+import { updateProfile } from '@/services/profile';
 import { ageFromDateOfBirth } from '@/utils/mockData';
 import { distanceBetween } from '@/utils/eligibility';
 import { formatDistance } from '@/utils/distance';
@@ -53,6 +61,10 @@ export function ProfileDetailScreen() {
   const { userId, user: passedUser, taste } = route.params;
   const [user, setUser] = useState<User | null>(passedUser ?? null);
   const viewer = useAuthStore((store) => store.user);
+  // Which photo is being looked at full size, if any.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  // Set when a removal fails, so the reason is on screen rather than nowhere.
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   useEffect(() => {
     // The feed passes the full record through navigation params. Only the mock
@@ -71,6 +83,34 @@ export function ProfileDetailScreen() {
     };
   }, [userId, passedUser]);
 
+  /**
+   * Removes one of this person's own photos.
+   *
+   * Only offered on their own profile. The rule that a person keeps at least one
+   * photo is the same one `PhotoManager` applies, and for the same reason: the
+   * feed needs a face to show, and a profile with no photos is not a profile.
+   */
+  const removeOwnPhoto = async (photoId: string) => {
+    if (!user) return;
+
+    const remaining = user.photos.filter((photo) => photo.id !== photoId);
+
+    if (remaining.length === 0) {
+      setPhotoError('Keep at least one photo so people recognise you.');
+      setPreviewId(null);
+      return;
+    }
+
+    setPhotoError(null);
+    try {
+      const updated = await updateProfile({ photos: remaining });
+      setUser(updated);
+      setPreviewId(null);
+    } catch {
+      setPhotoError('That photo could not be removed.');
+    }
+  };
+
   if (!user) {
     return (
       <ScreenContainer>
@@ -86,12 +126,22 @@ export function ProfileDetailScreen() {
   return (
     <ScreenContainer padded={false}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {photoError ? (
+          <ErrorBanner message={photoError} onDismiss={() => setPhotoError(null)} />
+        ) : null}
         {user.photos.length > 0 ? (
           <View style={styles.photos}>
             {user.photos.map((photo) => (
-              <View key={photo.id} style={styles.photo}>
+              <Pressable
+                key={photo.id}
+                onPress={() => setPreviewId(photo.id)}
+                accessibilityRole="button"
+                accessibilityLabel="Look at this photo full size"
+                style={styles.photo}
+                testID={`profile-photo-${photo.id}`}
+              >
                 <ProfileImage user={user} url={photo.url} initialsScale={0.3} />
-              </View>
+              </Pressable>
             ))}
           </View>
         ) : (
@@ -144,6 +194,34 @@ export function ProfileDetailScreen() {
           ) : null}
         </View>
       </ScrollView>
+
+      {/*
+       * Somebody else's photos are looked at and nothing more. Your own can
+       * also be taken away, from here, without a trip to the edit screen.
+       */}
+      <PhotoViewer
+        uri={previewId ? (user?.photos.find((photo) => photo.id === previewId)?.url ?? null) : null}
+        onClose={() => setPreviewId(null)}
+        title={
+          previewId
+            ? user?.photos.find((photo) => photo.id === previewId)?.isPrimary
+              ? 'Your main photo'
+              : 'Your photo'
+            : undefined
+        }
+        actions={
+          previewId && user && viewer?.id === user.id
+            ? [
+                {
+                  label: 'Remove',
+                  tone: 'danger',
+                  onPress: () => void removeOwnPhoto(previewId),
+                },
+              ]
+            : []
+        }
+        testID="profile-photo-viewer"
+      />
     </ScreenContainer>
   );
 }
@@ -230,7 +308,6 @@ function MatchBreakdown({
           </Text>
         </View>
       </View>
-
     </View>
   );
 }

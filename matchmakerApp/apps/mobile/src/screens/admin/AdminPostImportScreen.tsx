@@ -3,7 +3,14 @@ import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ScreenContainer, PrimaryButton, ErrorBanner, TagInput, SelectChips } from '@/components';
+import {
+  ScreenContainer,
+  PrimaryButton,
+  ErrorBanner,
+  TagInput,
+  SelectChips,
+  PhotoViewer,
+} from '@/components';
 import { useAuthMode } from '@/hooks';
 import { useAsync } from '@/hooks/useAsync';
 import { AdminImportError, importPosts, listAllTags } from '@/services/admin';
@@ -78,12 +85,28 @@ function formatBytes(bytes: number): string {
  * Tags are typed rather than chosen from a list, so the input suggests what the
  * library already uses without restricting anything.
  */
+/**
+ * How the chosen size is described.
+ *
+ * `auto` is not a width, so it cannot be described as one. Saying "apply
+ * 2880 px" for it would be a lie -- that is the cap, not what happens -- and
+ * the whole point of the option is that the width is decided by the photo and
+ * the byte budget rather than by a number in this list.
+ */
+function sizeDescription(size: ImportSizeId): string {
+  if (size === 'auto') {
+    return 'as large as fits, reduced only if it would be too big to store';
+  }
+  return `${importSizeWidth(size)} px`;
+}
+
 export function AdminPostImportScreen() {
   const navigation = useNavigation<Nav>();
   const [authMode] = useAuthMode();
-  const isMock = authMode === 'mock';
 
   const [picked, setPicked] = useState<PickedImage[]>([]);
+  // Which picked photo is being looked at full size, if any.
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [size, setSize] = useState<ImportSizeId>(DEFAULT_IMPORT_SIZE);
   const [tags, setTags] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -93,15 +116,27 @@ export function AdminPostImportScreen() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   // Suggestions only, so a failure here is not worth an error banner: the input
-  // accepts anything regardless, it just offers fewer shortcuts. Guarded on
-  // mock mode because that is the only place the library is readable, and the
-  // service throws rather than returning empty everywhere else.
+  // accepts anything regardless, it just offers fewer shortcuts. Deliberately
+  // not caught -- a non-admin gets a 403, and swallowing it would present "no
+  // suggestions yet" as if the library were empty.
   const { data: knownTags } = useAsync<Array<{ tag: string; count: number }>>(
-    async () => (isMock ? listAllTags() : []),
-    [isMock]
+    async () => listAllTags(),
+    [authMode]
   );
 
   const usable = picked.filter((image) => image.uri);
+
+  /**
+   * Takes one photo out of the batch.
+   *
+   * Without this, a mis-picked photo can only be dealt with by starting the
+   * whole selection again, which for a dozen photos means picking a dozen
+   * photos. The batch is a list, so removing one is a list operation.
+   */
+  const removePicked = (index: number) => {
+    setPicked((current) => current.filter((_, i) => i !== index));
+    setPreviewIndex(null);
+  };
 
   const choose = async () => {
     setError(null);
@@ -153,6 +188,13 @@ export function AdminPostImportScreen() {
           ...(image.thumbUri ? { thumbUri: image.thumbUri } : {}),
           ...(image.width ? { width: image.width } : {}),
           ...(image.height ? { height: image.height } : {}),
+          // The rendition ladder, widest first.
+          //
+          // Without it the photo is stored at one size and every screen gets
+          // that size -- a 2720px photo handed to a 342px tile, and stretched
+          // on a 2x display. The ladder is what lets the app pick the smallest
+          // copy that covers the pixels it is about to draw.
+          ...(image.variants ? { variants: image.variants } : {}),
         }))
       );
       navigation.goBack();
@@ -165,23 +207,12 @@ export function AdminPostImportScreen() {
     }
   };
 
-  if (!isMock) {
-    return (
-      <ScreenContainer>
-        <Text variant="bodyMedium">
-          Imported photos are stored in the mock database. Switch the auth mode
-          back to mock in Settings to use this.
-        </Text>
-      </ScreenContainer>
-    );
-  }
-
   return (
     <ScreenContainer scroll>
       <View style={styles.body}>
         <Text variant="bodySmall" style={styles.hint}>
-          These photos belong to the app, not to a profile. Everyone sees the
-          same library; liking one is how two people get pulled together.
+          These photos belong to the app, not to a profile. Everyone sees the same library; liking
+          one is how two people get pulled together.
         </Text>
 
         {error ? <ErrorBanner message={error} onDismiss={() => setError(null)} /> : null}
@@ -199,8 +230,8 @@ export function AdminPostImportScreen() {
             testID="admin-import-size"
             helperText={
               picked.length === 0
-                ? 'Photos are scaled to this width on import. Camera files are far larger than the app ever renders.'
-                : `These ${usable.length} were imported at the previous size. Choose different photos to apply ${importSizeWidth(size)} px.`
+                ? sizeDescription(size)
+                : `These ${usable.length} were imported at the previous size. Choose different photos to apply ${sizeDescription(size)}.`
             }
           />
         </View>
@@ -237,16 +268,42 @@ export function AdminPostImportScreen() {
                   {picked.map((image, index) => (
                     <View key={`${image.uri.slice(0, 24)}_${index}`} style={styles.preview}>
                       {image.uri ? (
-                        <Image
-                          source={{ uri: image.uri }}
-                          style={styles.previewImage}
-                          resizeMode="cover"
-                        />
+                        <Pressable
+                          onPress={() => setPreviewIndex(index)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Look at photo ${index + 1} full size`}
+                          style={styles.previewTap}
+                          testID={`admin-import-preview-${index}`}
+                        >
+                          <Image
+                            source={{ uri: image.uri }}
+                            style={styles.previewImage}
+                            resizeMode="cover"
+                          />
+                        </Pressable>
                       ) : (
                         <View style={[styles.previewImage, styles.previewRejected]}>
                           <Text style={styles.previewRejectedGlyph}>⚠️</Text>
                         </View>
                       )}
+
+                      {/*
+                       * The remove button sits on the thumb rather than behind
+                       * a long press, because a long press is not a gesture
+                       * anybody discovers and this is a destructive one.
+                       */}
+                      <Pressable
+                        onPress={() => removePicked(index)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove photo ${index + 1} of ${picked.length}${
+                          image.width ? `, ${image.width}px wide` : ''
+                        }, from this import`}
+                        hitSlop={6}
+                        style={styles.previewRemove}
+                        testID={`admin-import-remove-${index}`}
+                      >
+                        <Text style={styles.previewRemoveGlyph}>✕</Text>
+                      </Pressable>
                     </View>
                   ))}
                 </View>
@@ -271,8 +328,8 @@ export function AdminPostImportScreen() {
             TAGS
           </Text>
           <Text variant="bodySmall" style={styles.hint}>
-            Applied to all {usable.length} {usable.length === 1 ? 'photo' : 'photos'}. The
-            first tag is the primary one and is what a co-like is credited to.
+            Applied to all {usable.length} {usable.length === 1 ? 'photo' : 'photos'}. The first tag
+            is the primary one and is what a co-like is credited to.
           </Text>
 
           <TagInput
@@ -299,6 +356,37 @@ export function AdminPostImportScreen() {
               : `Import ${usable.length} ${usable.length === 1 ? 'photo' : 'photos'}`}
         </PrimaryButton>
       </View>
+
+      {/*
+       * The full-size look at one picked photo, with the way out of the batch
+       * on the same screen as the picture. A photo that is only ever seen as a
+       * 90-point thumb is a photo nobody can check.
+       */}
+      {/*
+       * Mounted only while it is open, rather than rendered with a null uri.
+       *
+       * A `Modal` renders its children even when it is hidden, and on the web
+       * those children live in a portal outside the navigator. Leaving a closed
+       * viewer mounted meant a state change anywhere in the screen re-rendered
+       * that portal, and the re-render lost the navigation context and threw.
+       */}
+      {previewIndex !== null ? (
+        <PhotoViewer
+          uri={picked[previewIndex]?.uri ?? null}
+          onClose={() => setPreviewIndex(null)}
+          title={`Photo ${previewIndex + 1} of ${picked.length}${
+            picked[previewIndex]?.width ? ` · ${picked[previewIndex]?.width}px wide` : ''
+          }`}
+          actions={[
+            {
+              label: 'Remove from import',
+              tone: 'danger',
+              onPress: () => removePicked(previewIndex),
+            },
+          ]}
+          testID="admin-import-viewer"
+        />
+      ) : null}
     </ScreenContainer>
   );
 }
@@ -328,6 +416,27 @@ const styles = StyleSheet.create({
     borderRadius: BORDER_RADIUS.md,
     overflow: 'hidden',
     backgroundColor: COLORS.surfaceVariant,
+  },
+  previewTap: {
+    width: '100%',
+    height: '100%',
+  },
+  previewRemove: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.65)',
+  },
+  previewRemoveGlyph: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 16,
   },
   previewImage: { width: '100%', height: '100%' },
   previewRejected: { alignItems: 'center', justifyContent: 'center' },

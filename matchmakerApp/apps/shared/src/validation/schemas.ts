@@ -136,7 +136,16 @@ export const postTagSchema = z
  * "you have none" wording, and the count checks have to be applied to the raw
  * list before the transform wraps it.
  */
-function postTagListSchema(minMessage: string) {
+/**
+ * A list of tags, folded and de-duplicated.
+ *
+ * Exported because the API needs the same rule the app applies. The tag editor
+ * folds on the way in, but a caller that skips the editor -- the API itself, or
+ * a future importer -- would otherwise be able to store `Dogs` and `dogs` as two
+ * different tags, and the first one to be searched for would only find half the
+ * photos.
+ */
+export function postTagListSchema(minMessage: string) {
   return z
     .array(postTagSchema)
     .min(MIN_POST_TAGS, minMessage)
@@ -188,6 +197,18 @@ export const postReactionSchema = z.object({
   createdAt: z.string(),
 });
 
+/**
+ * One rendition of a photo, at a known width.
+ *
+ * The ladder is what lets the app show a photo sharply on any display: the
+ * client picks the smallest rendition that covers the pixels it is about to
+ * draw. See `pickVariant` in `apps/mobile/src/utils/images.ts`.
+ */
+export const postVariantSchema = z.object({
+  width: z.number().int().positive(),
+  uri: z.string().min(1),
+});
+
 /** What the admin importer takes, before ids and timestamps are assigned. */
 export const postImportSchema = z.object({
   imageUri: z.string().min(1, 'The image is missing'),
@@ -195,6 +216,15 @@ export const postImportSchema = z.object({
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   tags: postTagListSchema('Type a tag and press enter'),
+  /**
+   * The smaller renditions, widest first.
+   *
+   * Declared here rather than left off on purpose: Zod objects strip keys they
+   * do not know about, so a schema without this field would silently *remove*
+   * the ladder from every import and the app would be back to one rendition per
+   * photo without ever saying so.
+   */
+  variants: z.array(postVariantSchema).max(8).optional(),
 });
 
 /** The whole account setup as one validated object, for a backend setup call. */

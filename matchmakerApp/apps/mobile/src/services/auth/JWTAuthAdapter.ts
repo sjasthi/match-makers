@@ -10,6 +10,7 @@ import type {
 import { AUTH_STORAGE_KEYS } from '@/constants';
 import { getSecretStore } from '@/services/storage/keyValueStore';
 import { getApiClient } from '@/services/api/client';
+import { disconnectRealtime } from '@/services/realtime';
 import { AuthError } from './AuthError';
 import type { AuthAdapter, AuthMode } from './AuthAdapter';
 
@@ -112,6 +113,11 @@ export class JWTAuthAdapter implements AuthAdapter {
       store.remove(AUTH_STORAGE_KEYS.ACCESS_TOKEN),
       store.remove(AUTH_STORAGE_KEYS.REFRESH_TOKEN),
     ]);
+
+    // The realtime socket authenticates with the access token that has just
+    // been thrown away, and it would keep delivering this account's messages to
+    // a device that is no longer signed in as them.
+    disconnectRealtime();
   }
 
   private async storeTokens(tokens: AuthTokens): Promise<void> {
