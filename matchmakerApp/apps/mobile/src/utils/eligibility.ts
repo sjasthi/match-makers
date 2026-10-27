@@ -1,4 +1,4 @@
-import { Gender, type DistanceMode, type Location, type User } from '@match-makers/shared';
+import { Gender, type DistanceMode, type Location, type User, SexualOrientation, orientationAllows } from '@match-makers/shared';
 
 import { distanceKm, hasCoordinates } from '@/utils/distance';
 import { ageFromDateOfBirth } from '@/utils/mockData';
@@ -28,6 +28,7 @@ export type BlockerCode =
   | 'goal'
   | 'distance'
   | 'missing_location'
+  | 'orientation'
   | 'their_requirements';
 
 export interface EligibilityResult {
@@ -90,10 +91,9 @@ function distanceSatisfied(
  * an empty deck, and collapsing the two directions throws that away.
  *
  * The gate the feed applies answers one question: could this work at all. Age,
- * gender, distance and relationship goals all fail a pair that a good score does
- * not fix, so none of them is negotiable by how much taste two people happen to
- * share. Sexual orientation stays a scoring signal rather than a gate, because
- * it is not a requirement anybody gets to impose on a stranger.
+ * gender, distance, relationship goals, and orientation compatibility all fail
+ * a pair that a good score does not fix, so none of them is negotiable by how
+ * much taste two people happen to share.
  */
 export function checkEligibility(seeker: User, target: User): EligibilityResult {
   if (seeker.id === target.id) {
@@ -135,6 +135,12 @@ export function checkEligibility(seeker: User, target: User): EligibilityResult 
 
   if (distance.missing) failures.push('missing_location');
   else if (!distance.ok) failures.push('distance');
+
+  // Orientation compatibility: both people must be able to be attracted to each other.
+  // Wildcard orientations (bi, pan, asexual, queer, other, prefer_not_to_say) never block.
+  if (!orientationAllows(seeker.sexualOrientation, seeker.gender, target.gender)) {
+    failures.push('orientation');
+  }
 
   if (failures.length === 0) return { ...ELIGIBLE, distanceKm: distance.distanceKm };
   return { eligible: false, distanceKm: distance.distanceKm, failures };
@@ -211,6 +217,7 @@ export function summariseBlockers(blockers: readonly BlockerCode[]): string {
     goal: 'the relationship goals you have chosen',
     distance: 'your distance limit',
     missing_location: 'people who have not set a location',
+    orientation: 'sexual orientation compatibility',
     their_requirements: 'people who have filtered you out',
   };
 

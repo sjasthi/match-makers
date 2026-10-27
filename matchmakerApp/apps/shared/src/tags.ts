@@ -30,17 +30,22 @@ export const TAG_MAX_LENGTH = 24;
  * - not ending in `ss`, so `fitness`, `glass`, `dress` survive
  * - not ending in `us`, so `bus`, `focus`, `cactus` survive
  * - not ending in `is`, so `iris` and `analysis` survive
+ * - not ending in `as`, so `christmas` and `canvas` survive
  *
- * This is a heuristic, not a stemmer, and it has a known false positive: `news`
- * folds to `new`, so somebody who types `news` and somebody who types `new` will
- * connect when they arguably should not. That is a rare pairing for a photo tag
- * and the alternative is either a dictionary dependency or an admin alias table,
- * so it is accepted rather than hidden. `dogs` and `dog` is the common case and
- * this gets it right.
+ * This is a heuristic, not a stemmer, and it has known false positives in both
+ * directions: `news` folds to `new`, so somebody who types `news` and somebody
+ * who types `new` will connect when they arguably should not. And the `as`
+ * guard means `pizzas` does *not* fold to `pizza` — two spellings stay two
+ * tags. Both costs are accepted rather than hidden, because the alternative is
+ * either a dictionary dependency or an admin alias table, and a chip that says
+ * `Christma` is the visibly wrong one of the two. `dogs` and `dog` is the
+ * common case and this gets it right.
  */
 function foldPlural(word: string): string {
   if (word.length <= 3) return word;
-  if (word.endsWith('ss') || word.endsWith('us') || word.endsWith('is')) return word;
+  if (word.endsWith('ss') || word.endsWith('us') || word.endsWith('is') || word.endsWith('as')) {
+    return word;
+  }
   if (!word.endsWith('s')) return word;
   return word.slice(0, -1);
 }

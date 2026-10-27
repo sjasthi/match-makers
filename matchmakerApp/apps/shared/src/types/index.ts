@@ -17,6 +17,77 @@ export enum SexualOrientation {
   PREFER_NOT_TO_SAY = 'prefer_not_to_say',
 }
 
+/**
+ * Orientation compatibility matrix.
+ *
+ * Returns true when `viewer`'s orientation could include attraction to
+ * `candidate`'s gender. Used as a mutual visibility gate: both directions
+ * must pass (viewer attracted to candidate AND candidate attracted to viewer).
+ *
+ * Wildcard orientations (bisexual, pansexual, asexual, queer, other,
+ * prefer_not_to_say) never block — they are treated as compatible with
+ * all genders. This mirrors the existing convention for unstated gender.
+ *
+ * Binary genders only for the strict orientations (straight, gay, lesbian);
+ * non_binary and prefer_not_to_say are treated as compatible with wildcard
+ * orientations (they don't block).
+ */
+export function orientationAllows(
+  viewerOrientation: SexualOrientation,
+  viewerGender: Gender,
+  candidateGender: Gender
+): boolean {
+  // Wildcard orientations never block
+  const wildcard: SexualOrientation[] = [
+    SexualOrientation.BISEXUAL,
+    SexualOrientation.PANSEXUAL,
+    SexualOrientation.ASEXUAL,
+    SexualOrientation.QUEER,
+    SexualOrientation.OTHER,
+    SexualOrientation.PREFER_NOT_TO_SAY,
+  ];
+  if (wildcard.includes(viewerOrientation)) return true;
+
+  // A candidate who declined to state their gender is never excluded by
+  // a strict orientation. The alternative would make answering honestly
+  // a reason to be hidden, which contradicts the preference gate's design.
+  if (candidateGender === Gender.PREFER_NOT_TO_SAY) return true;
+
+  // Strict orientations: check gender compatibility
+  switch (viewerOrientation) {
+    case SexualOrientation.STRAIGHT:
+      // Straight: attracted to opposite binary gender
+      if (viewerGender === Gender.MALE) return candidateGender === Gender.FEMALE;
+      if (viewerGender === Gender.FEMALE) return candidateGender === Gender.MALE;
+      // Non-binary viewer: straight is ambiguous, treat as wildcard (don't block)
+      return true;
+    case SexualOrientation.GAY:
+      // Gay: attracted to same gender (male)
+      return viewerGender === Gender.MALE && candidateGender === Gender.MALE;
+    case SexualOrientation.LESBIAN:
+      // Lesbian: attracted to same gender (female)
+      return viewerGender === Gender.FEMALE && candidateGender === Gender.FEMALE;
+    default:
+      return true;
+  }
+}
+
+/**
+ * Mutual orientation compatibility: both people must be able to be attracted to each other.
+ * Returns true if the pair should be visible to each other.
+ */
+export function mutualOrientationAllows(
+  viewerOrientation: SexualOrientation,
+  viewerGender: Gender,
+  candidateOrientation: SexualOrientation,
+  candidateGender: Gender
+): boolean {
+  return (
+    orientationAllows(viewerOrientation, viewerGender, candidateGender) &&
+    orientationAllows(candidateOrientation, candidateGender, viewerGender)
+  );
+}
+
 export enum RelationshipGoal {
   LONG_TERM = 'long_term',
   SHORT_TERM = 'short_term',

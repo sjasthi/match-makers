@@ -464,3 +464,21 @@ Where it lands
 - Not built: real verification, so the badge still means nothing and now only says
   it; a background worker, so other people's decks still wait for the next batch; and
   any tuning of the numbers against real data, because there is none yet.
+
+[FP8] 10/27/2026
+### Planning user self-verification.
+FP1 asked how we weed out the liars and FP7 left the badge as a claim a person makes
+about themselves (`POST /profile/verification` just flips a flag). The plan for the
+next iteration is to let users verify themselves rather than waiting on us to check
+them, and to make that claim mean something.
+
+Brief:
+- The user starts a check from their own profile and the system confirms it against
+  something they cannot simply assert: a pose/selfie match against their photos, or
+  connecting an already-verified external account.
+- Verification is per claim (identity, photos are current), not one global checkbox,
+  and it expires so an old check cannot vouch for a new set of photos.
+- Admin review stays as the backstop for reports, reusing the `requireAdmin` path
+  from FP6 rather than a new surface.
+- It stays a trust badge. FP7 already took verification out of the score; nothing
+  here puts it back.

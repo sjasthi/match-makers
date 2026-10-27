@@ -119,19 +119,24 @@ describe('the people a summary may name', () => {
     expect(summary.closestBlockedByFilters).toBe(false);
   });
 
-  it('names only people the deck also lists', async () => {
+  it('names only people the deck could list', async () => {
     await signInDemo();
     const [post] = await mockDb.allPosts();
     await mockDb.recordPostReaction('user_demo', (post as Post).id, 'like');
 
     const summary = await fetchTasteSummary();
-    const deck = await fetchFeed(1, 50);
-    const inDeck = new Set(deck.items.map((item) => item.user.id));
+    const everyone = await mockDb.allUsers();
+    const viewer = everyone.find((user) => user.id === 'user_demo')!;
 
-    // The two screens are two views of one rule. If this fails they have drifted
-    // again, which is how the original bug happened.
+    // The deck now additionally hides anybody below the 80% bar, so "the deck
+    // lists them" is no longer the invariant. What must hold is that every
+    // person the summary names has passed the same eligibility gates the deck
+    // applies: they are people the deck *could* show once the photos earn it.
+    // Naming somebody the filters already ruled out would promise a consequence
+    // the app had excluded, which is how the original bug happened.
     for (const entry of summary.closest) {
-      expect(inDeck.has(entry.userId)).toBe(true);
+      const candidate = everyone.find((user) => user.id === entry.userId)!;
+      expect(mutualGate(viewer, candidate).eligible).toBe(true);
     }
   });
 });
@@ -147,11 +152,19 @@ describe('the number on a summary card', () => {
 
     expect(summary.closest.length).toBeGreaterThan(0);
     for (const entry of summary.closest) {
-      const card = deck.items.find((item) => item.user.id === entry.userId);
-      expect(card).toBeDefined();
       // Two different percentages for the same word "match", on two screens a
       // swipe apart, is how "who is closest" became unanswerable from the UI.
-      expect(entry.score).toBe(card!.compatibility.score);
+      // The deck only carries 80%+ cards, so either the person is in the deck
+      // with the same number, or they are absent *because* their number is
+      // below the bar. Both halves of this assertion keep the two screens from
+      // inventing different scores for the same pair.
+      const card = deck.items.find((item) => item.user.id === entry.userId);
+      if (card) {
+        expect(entry.score).toBe(card.compatibility.score);
+      } else {
+        expect(entry.score).not.toBeNull();
+        expect(entry.score!).toBeLessThan(80);
+      }
     }
   });
 

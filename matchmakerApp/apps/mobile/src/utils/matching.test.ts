@@ -63,25 +63,31 @@ describe('ageFromDateOfBirth', () => {
 });
 
 describe('scoreCompatibility', () => {
-  it('is dominated by shared taste', () => {
+  it('is dominated by shared taste (now 100% of score)', () => {
     const base = scoreCompatibility(VIEWER, candidate());
     const boosted = scoreCompatibility(VIEWER, candidate(), taste(1));
 
-    // Taste owns 80 of 100. That is the inversion of FP3, where a stated
-    // questionnaire owned 45 and the photo feed was worth 10.
-    expect(MATCH_WEIGHTS.sharedTaste).toBe(80);
-    expect(boosted.score - base.score).toBeGreaterThanOrEqual(MATCH_WEIGHTS.sharedTaste - 2);
+    // Taste now owns 100 of 100. Stated facts (goal, orientation, verified) are gates/badges only.
+    expect(MATCH_WEIGHTS.sharedTaste).toBe(100);
+    // With no taste, score is null; with full taste, score is 100
+    expect(base.score).toBeNull();
+    expect(boosted.score).toBe(100);
   });
 
-  it('scores exactly as before when there is no taste signal', () => {
-    expect(scoreCompatibility(VIEWER, candidate())).toEqual(
-      scoreCompatibility(VIEWER, candidate(), {
-        affinity: 0,
-        coLikedPosts: 0,
-        sharedTags: [],
-        reason: null,
-      })
-    );
+  it('returns null score when there is no taste signal', () => {
+    const result = scoreCompatibility(VIEWER, candidate());
+    expect(result.score).toBeNull();
+    expect(result.tasteAffinity).toBe(0);
+    expect(result.reason).toBeNull();
+  });
+
+  it('returns score = affinity * 100 when taste is provided', () => {
+    const half = scoreCompatibility(VIEWER, candidate(), taste(0.5));
+    expect(half.score).toBe(50);
+    expect(half.tasteAffinity).toBe(0.5);
+
+    const full = scoreCompatibility(VIEWER, candidate(), taste(1));
+    expect(full.score).toBe(100);
   });
 
   it('never passes 100', () => {
@@ -89,67 +95,34 @@ describe('scoreCompatibility', () => {
     expect(perfect.score).toBeLessThanOrEqual(100);
   });
 
-  it('cannot reach a strong match on taste alone', () => {
-    // `coLikeOverlap` is `n / (n + 2)`, which approaches but never reaches 1, so
-    // the achievable taste total is strictly under 80. That is the only thing
-    // stopping a behavioural signal from reading as "Strong match" on its own,
-    // which matters because taste must not be able to overrule what somebody said
-    // they were looking for.
-    const bare = {
-      ...VIEWER,
-      relationshipGoal: RelationshipGoal.NOT_SURE,
-      sexualOrientation: SexualOrientation.PREFER_NOT_TO_SAY,
-      isVerified: false,
-    };
-    // Maximally distant goals: rank 0 against rank 3, which earns nothing at all.
-    const opposing = {
-      ...candidate(),
-      relationshipGoal: RelationshipGoal.LONG_TERM,
-      sexualOrientation: SexualOrientation.ASEXUAL,
-      isVerified: false,
-    };
-
-    const ceiling = scoreCompatibility(bare, opposing, taste(0.99));
-
-    expect(ceiling.score).toBeLessThan(80);
-    expect(compatibilityLabel(ceiling.score)).not.toBe('Strong match');
-  });
-
-  it('gives the same stated goal full points and opposite goals none', () => {
-    // A ramp, not equality: `not_sure` against `long_term` is the widest gap the
-    // ranking has and earns nothing, while `long_term` against `casual` is closer
-    // and earns something. Only the identical pair takes the full weight.
+  it('reports sharedGoals as informational only (not scored)', () => {
     const same = scoreCompatibility(
       VIEWER,
-      candidate({ relationshipGoal: RelationshipGoal.LONG_TERM })
+      candidate({ relationshipGoal: RelationshipGoal.LONG_TERM }),
+      taste(0.5)
     );
     const opposite = scoreCompatibility(
       VIEWER,
-      candidate({ relationshipGoal: RelationshipGoal.NOT_SURE })
+      candidate({ relationshipGoal: RelationshipGoal.NOT_SURE }),
+      taste(0.5)
     );
 
     expect(same.sharedGoals).toBe(true);
     expect(opposite.sharedGoals).toBe(false);
-    expect(same.score - opposite.score).toBe(MATCH_WEIGHTS.relationshipGoal);
+    // Score is identical because goal is not a scoring signal
+    expect(same.score).toBe(opposite.score);
   });
 
-  it('gives compatible orientation points', () => {
-    const same = scoreCompatibility(VIEWER, candidate());
-    const different = scoreCompatibility(
-      VIEWER,
-      candidate({ sexualOrientation: SexualOrientation.ASEXUAL })
-    );
-
-    expect(same.mutualOrientation).toBe(true);
-    expect(different.mutualOrientation).toBe(false);
-    expect(same.score - different.score).toBe(MATCH_WEIGHTS.mutualOrientation);
+  it('does not include mutualOrientation in breakdown (now a gate)', () => {
+    const result = scoreCompatibility(VIEWER, candidate(), taste(0.5));
+    expect('mutualOrientation' in result).toBe(false);
   });
 
-  it('gives a verified profile points', () => {
-    const verified = scoreCompatibility(VIEWER, candidate({ isVerified: true }));
-    const not = scoreCompatibility(VIEWER, candidate({ isVerified: false }));
+  it('does not include verified in score (badge only)', () => {
+    const verified = scoreCompatibility(VIEWER, candidate({ isVerified: true }), taste(0.5));
+    const not = scoreCompatibility(VIEWER, candidate({ isVerified: false }), taste(0.5));
 
-    expect(verified.score - not.score).toBe(MATCH_WEIGHTS.verified);
+    expect(verified.score).toBe(not.score);
   });
 
   it('reports the taste evidence it was given', () => {
@@ -169,9 +142,6 @@ describe('scoreCompatibility', () => {
   });
 
   it('scores two strangers identically when neither has answered anything', () => {
-    // The cold-start case the "building up" strip exists to explain. It is
-    // honest that it is degenerate rather than pretending a stale questionnaire
-    // is still standing in for evidence.
     const first = scoreCompatibility(VIEWER, candidate({ id: 'a' }));
     const second = scoreCompatibility(
       VIEWER,
@@ -179,20 +149,17 @@ describe('scoreCompatibility', () => {
     );
 
     expect(first.score).toBe(second.score);
+    expect(first.score).toBeNull();
   });
 
   it('does not penalise or reward age, gender or distance any more', () => {
-    // All three are hard eligibility rules in `utils/eligibility.ts`. They used to
-    // be worth 20 points *as well*, which counted the same filter twice.
-    const inRange = scoreCompatibility(VIEWER, candidate({ dateOfBirth: '1995-05-20' }));
-    const outOfRange = scoreCompatibility(VIEWER, candidate({ dateOfBirth: '1970-01-01' }));
+    const inRange = scoreCompatibility(VIEWER, candidate({ dateOfBirth: '1995-05-20' }), taste(0.5));
+    const outOfRange = scoreCompatibility(VIEWER, candidate({ dateOfBirth: '1970-01-01' }), taste(0.5));
 
     expect(inRange.score).toBe(outOfRange.score);
   });
 
   it('has no deal-breaker veto left', () => {
-    // Confirmed as acceptable when the questionnaire went. Stated as a test so a
-    // future change that reintroduces a veto has to say so deliberately.
     expect('dealBreakerClash' in scoreCompatibility(VIEWER, candidate())).toBe(false);
   });
 });
@@ -202,23 +169,19 @@ describe('against real seeded data', () => {
     const viewer = VIEWER;
     const others = generateMockUsers(8) as User[];
     const posts = generateSeedPosts(24);
-    // The viewer needs reactions too. In the app the demo account starts with
-    // none on purpose - their taste is whatever they answer - so a test that
-    // only seeded the candidates would be measuring the cold-start case.
     const reactions = seedReactionsFor([viewer, ...others], posts);
     const index = buildTasteIndex(reactions, posts);
 
-    // Built the way the feed builds it, so this exercises the real signal path
-    // rather than only a hand-written fixture.
     const scored = others.map((user) =>
       scoreCompatibility(viewer, user, tasteBetween(index, viewer.id, user.id))
     );
 
-    // Seeded candidates carry reactions, so the signal is live against real rows.
     expect(scored.some((result) => result.tasteAffinity > 0)).toBe(true);
     for (const result of scored) {
-      expect(result.score).toBeGreaterThanOrEqual(0);
-      expect(result.score).toBeLessThanOrEqual(100);
+      if (result.score !== null) {
+        expect(result.score).toBeGreaterThanOrEqual(0);
+        expect(result.score).toBeLessThanOrEqual(100);
+      }
     }
   });
 
@@ -227,7 +190,9 @@ describe('against real seeded data', () => {
     const withoutTaste = scoreCompatibility(VIEWER, other);
     const withTaste = scoreCompatibility(VIEWER, other, taste(0.6));
 
-    expect(withTaste.score).toBeGreaterThan(withoutTaste.score);
+    expect(withTaste.score).not.toBeNull();
+    expect(withoutTaste.score).toBeNull();
+    expect(withTaste.score).toBeGreaterThan(0);
   });
 });
 
@@ -245,11 +210,9 @@ describe('compatibilityLabel', () => {
     expect(compatibilityLabel(score)).toBe(expected);
   });
 
-  it('says there is not enough to go on at zero', () => {
-    // Zero means "no shared evidence yet", not "definitely incompatible". The
-    // wording has to keep that difference, because the deck shows zeroes to
-    // everyone who has not answered any photos.
-    expect(compatibilityLabel(0)).toBe('Not enough to go on');
+  it('says there is not enough to go on at null (no photo evidence)', () => {
+    // Null means "no shared evidence yet", not "definitely incompatible".
+    expect(compatibilityLabel(null)).toBe('No match % yet');
   });
 });
 

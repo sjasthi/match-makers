@@ -179,37 +179,46 @@ export function LikesScreen() {
           />
         ) : showEmptyState ? (
           <>
-            <Pressable
-              onPress={() => tabNavigation.navigate('Feed')}
-              accessibilityRole="button"
-              accessibilityLabel="Answer some photos to tune who we show you"
-              style={styles.tuneLink}
-              testID="likes-go-to-feed"
-            >
-              <Text variant="bodySmall" style={styles.tuneLinkText}>
-                No luck here? Answer a few photos and we will reorder this deck.
-              </Text>
-            </Pressable>
-            <EmptyState
-              icon="🗺️"
-              title={
-                // Named from the server/mock response rather than guessed here.
-                // The old copy told people to widen their distance
-                // unconditionally, which was advice about a setting that was
-                // collected, displayed and never actually applied.
-                blockedReason ? 'Nobody fits your filters' : 'No profiles yet'
-              }
-              message={
-                blockedReason ??
-                'There is nobody else here yet. Check back soon, or share your profile with more people.'
-              }
-              actionLabel={blockedReason ? 'Adjust preferences' : 'Reload'}
-              onAction={() =>
-                blockedReason
-                  ? navigation.navigate('Profile', { screen: 'Preferences' })
-                  : void load({ refresh: true })
-              }
-            />
+            {blockedReason?.includes('No strong matches') ? (
+              // Eligible profiles exist but none at 80%+
+              <EmptyState
+                icon="📷"
+                title="No strong matches yet"
+                message="Like more photos to find people you really click with. Strong matches (80%+) appear here."
+                actionLabel="Go to the photos"
+                onAction={() => tabNavigation.navigate('Feed')}
+              />
+            ) : (
+              <>
+                <Pressable
+                  onPress={() => tabNavigation.navigate('Feed')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Answer some photos to tune who we show you"
+                  style={styles.tuneLink}
+                  testID="likes-go-to-feed"
+                >
+                  <Text variant="bodySmall" style={styles.tuneLinkText}>
+                    No luck here? Answer a few photos and we will reorder this deck.
+                  </Text>
+                </Pressable>
+                <EmptyState
+                  icon="🗺️"
+                  title={
+                    blockedReason ? 'Nobody fits your filters' : 'No profiles yet'
+                  }
+                  message={
+                    blockedReason ??
+                    'There is nobody else here yet. Check back soon, or share your profile with more people.'
+                  }
+                  actionLabel={blockedReason ? 'Adjust preferences' : 'Reload'}
+                  onAction={() =>
+                    blockedReason
+                      ? navigation.navigate('Profile', { screen: 'Preferences' })
+                      : void load({ refresh: true })
+                  }
+                />
+              </>
+            )}
           </>
         ) : (
           <ScrollView

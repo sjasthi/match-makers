@@ -23,6 +23,7 @@ import {
   scoreCompatibility,
   MATCH_WEIGHTS,
   type TasteSignal,
+  type CompatibilityBreakdown,
 } from '@/utils/matching';
 import { useAuthStore } from '@/stores/authStore';
 import { COLORS, FONT_SIZES, SPACING } from '@/constants';
@@ -233,6 +234,9 @@ export function ProfileDetailScreen() {
  * dating app, so every signal is named and weighted out loud, including the
  * ones that scored nothing.
  *
+ * Score is now purely photo taste affinity. The stated facts (goal, orientation,
+ * verified) are gates or badges, not scoring signals.
+ *
  * `taste` arrives on the route from the deck, which is the only place that had
  * the reactions table loaded. Without it the photo feed contributes nothing here
  * and the row is simply absent, rather than claiming a score it did not read.
@@ -248,26 +252,43 @@ function MatchBreakdown({
 }) {
   const result = scoreCompatibility(viewer, candidate, taste);
 
-  const rows: Array<{ label: string; value: string; earned: number; of: number }> = [
-    {
-      label: 'Photos you both like',
-      value: result.reason ?? 'Nothing in common yet',
-      earned: result.tasteAffinity * MATCH_WEIGHTS.sharedTaste,
-      of: MATCH_WEIGHTS.sharedTaste,
-    },
-    {
-      label: 'Relationship goal',
-      value: result.sharedGoals ? 'Same' : 'Different',
-      earned: result.sharedGoals ? MATCH_WEIGHTS.relationshipGoal : 0,
-      of: MATCH_WEIGHTS.relationshipGoal,
-    },
-    {
-      label: 'Orientation',
-      value: result.mutualOrientation ? 'Compatible' : 'Not compatible',
-      earned: result.mutualOrientation ? MATCH_WEIGHTS.mutualOrientation : 0,
-      of: MATCH_WEIGHTS.mutualOrientation,
-    },
-  ];
+  // No photo evidence yet - show placeholder
+  if (result.score === null) {
+    return (
+      <View style={styles.section}>
+        <Text variant="titleSmall" style={styles.sectionTitle}>
+          Your match
+        </Text>
+        <Text variant="headlineMedium" style={styles.score}>
+          No match % yet
+        </Text>
+        <Text variant="bodySmall" style={styles.scoreCaption}>
+          {compatibilityLabel(result.score)}
+        </Text>
+        <Text variant="bodyMedium" style={styles.noTasteText}>
+          Like some photos and we will have something to go on.
+        </Text>
+        {result.sharedGoals ? (
+          <View style={styles.breakdownRow}>
+            <View style={styles.breakdownText}>
+              <Text variant="bodyMedium">Relationship goal</Text>
+              <Text variant="bodySmall" style={styles.breakdownValue} numberOfLines={2}>
+                Same goal
+              </Text>
+            </View>
+          </View>
+        ) : null}
+        <View style={styles.breakdownRow}>
+          <View style={styles.breakdownText}>
+            <Text variant="bodyMedium">Distance</Text>
+            <Text variant="bodySmall" style={styles.breakdownValue} numberOfLines={2}>
+              {describeDistanceTo(viewer, candidate)}
+            </Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.section}>
@@ -281,19 +302,31 @@ function MatchBreakdown({
         {compatibilityLabel(result.score)}
       </Text>
 
-      {rows.map((row) => (
-        <View key={row.label} style={styles.breakdownRow}>
+      <View style={styles.breakdownRow}>
+        <View style={styles.breakdownText}>
+          <Text variant="bodyMedium">Photos you both like</Text>
+          <Text variant="bodySmall" style={styles.breakdownValue} numberOfLines={2}>
+            {result.reason ?? 'Nothing in common yet'}
+          </Text>
+        </View>
+        <Text variant="bodyMedium" style={styles.breakdownPoints}>
+          {Math.round(result.tasteAffinity * MATCH_WEIGHTS.sharedTaste)}/{MATCH_WEIGHTS.sharedTaste}
+        </Text>
+      </View>
+
+      {result.sharedGoals ? (
+        <View style={styles.breakdownRow}>
           <View style={styles.breakdownText}>
-            <Text variant="bodyMedium">{row.label}</Text>
+            <Text variant="bodyMedium">Relationship goal</Text>
             <Text variant="bodySmall" style={styles.breakdownValue} numberOfLines={2}>
-              {row.value}
+              Same goal
             </Text>
           </View>
           <Text variant="bodyMedium" style={styles.breakdownPoints}>
-            {Math.round(row.earned)}/{row.of}
+            {`Same`}
           </Text>
         </View>
-      ))}
+      ) : null}
 
       {/* Distance is deliberately not one of the rows above. Those are weighted
           scoring signals and this is not one: it either passed your limit or
@@ -316,6 +349,7 @@ const styles = StyleSheet.create({
   content: { paddingBottom: SPACING.xxl },
   score: { fontWeight: '800', color: COLORS.primary },
   scoreCaption: { color: COLORS.textSecondary, marginBottom: SPACING.sm },
+  noTasteText: { color: COLORS.textSecondary, fontStyle: 'italic', marginBottom: SPACING.sm },
   breakdownRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

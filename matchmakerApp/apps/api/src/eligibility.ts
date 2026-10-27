@@ -15,6 +15,9 @@
  *    candidate whose own rules exclude you is somebody who will never see you
  *    back.
  *  - Distance, when either side is using `nearby`.
+ *  - Sexual orientation compatibility: both people must be able to be attracted
+ *    to each other's gender. Wildcard orientations (bi, pan, asexual, queer,
+ *    other, prefer_not_to_say) never block.
  *
  * The distance clause is the fiddly one. The expression returns NULL when
  * *either* side has no coordinates, and `NULL <= 50` is NULL, which is not true
@@ -70,6 +73,39 @@ export function eligibilitySql(): string {
         v.distance_mode = 'global' OR v.max_distance IS NULL
         OR ${noLocation('v')} OR ${noLocation('c')}
         OR (${HAVERSINE}) <= v.max_distance
+      )
+
+      /* --- sexual orientation compatibility (mutual) --- */
+      -- Wildcard orientations never block: bi, pan, asexual, queer, other, prefer_not_to_say
+      -- A candidate/viewer with prefer_not_to_say gender is never excluded by strict orientations
+      AND (
+        v.sexual_orientation IN ('bisexual','pansexual','asexual','queer','other','prefer_not_to_say')
+        OR c.sexual_orientation IN ('bisexual','pansexual','asexual','queer','other','prefer_not_to_say')
+        OR c.gender = 'prefer_not_to_say'
+        OR (
+          v.sexual_orientation = 'straight' AND (
+            (v.gender = 'male' AND c.gender = 'female')
+            OR (v.gender = 'female' AND c.gender = 'male')
+            OR v.gender = 'non_binary'
+          )
+        )
+        OR (v.sexual_orientation = 'gay' AND v.gender = 'male' AND c.gender = 'male')
+        OR (v.sexual_orientation = 'lesbian' AND v.gender = 'female' AND c.gender = 'female')
+      )
+      -- Candidate's orientation pointed back at viewer
+      AND (
+        c.sexual_orientation IN ('bisexual','pansexual','asexual','queer','other','prefer_not_to_say')
+        OR v.sexual_orientation IN ('bisexual','pansexual','asexual','queer','other','prefer_not_to_say')
+        OR v.gender = 'prefer_not_to_say'
+        OR (
+          c.sexual_orientation = 'straight' AND (
+            (c.gender = 'male' AND v.gender = 'female')
+            OR (c.gender = 'female' AND v.gender = 'male')
+            OR c.gender = 'non_binary'
+          )
+        )
+        OR (c.sexual_orientation = 'gay' AND c.gender = 'male' AND v.gender = 'male')
+        OR (c.sexual_orientation = 'lesbian' AND c.gender = 'female' AND v.gender = 'female')
       )
 
       /* --- and the candidate's, pointed back at the caller --- */

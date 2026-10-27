@@ -245,12 +245,13 @@ describe('account creation', () => {
     await openLikesTab();
 
     // The old failure mode was a questionnaire prompt where the cards should be.
-    // The gate now is a single like, and the empty state says so in those words,
-    // so nothing else is allowed to stand between a person and their deck.
+    // The deck now only carries cards at 80%+, and one like cannot earn that,
+    // so the right landing here is the *explained* empty deck. Either way,
+    // nothing else is allowed to stand between a person and their deck.
     expect(screen.queryByText('What matters to you?')).toBeNull();
     // Waited for rather than read directly: the grid arrives on the feed fetch
     // after the tab settles, so reading a card straight away races it.
-    await waitFor(() => expect(screen.getAllByTestId(/^deck-card-/).length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText('No strong matches yet')).toBeTruthy());
   });
 });
 

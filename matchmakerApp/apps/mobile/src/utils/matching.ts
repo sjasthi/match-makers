@@ -3,25 +3,11 @@ import type { RelationshipGoal, User } from '@match-makers/shared';
 /**
  * Point budget.
  *
- * Shared photo taste owns 80 of the 100. That is a deliberate inversion of FP3,
- * where a stated questionnaire owned 45 and the photo feed was worth 10: the
- * question of what somebody actually wants in a partner is now answered by what
- * they have chosen to spend a tap on, and by the stated answers being treated as
- * a gate rather than a score.
- *
- * Which is why there is no point value for age range or gender preference any
- * more. Both are already hard eligibility rules (`utils/eligibility.ts`) and were
- * being counted twice — filtered out *and* worth 20 points between them.
- *
- * The remaining 20 is deliberately small. Everything in it is a fact about
- * somebody rather than a preference they set, so none of it can be tuned into
- * overriding the taste signal.
+ * Score is now 100% photo taste affinity. All stated-fact signals (goal,
+ * orientation, verified) are visibility gates or badges only, not scoring components.
  */
 export const MATCH_WEIGHTS = {
-  sharedTaste: 80,
-  relationshipGoal: 10,
-  mutualOrientation: 6,
-  verified: 4,
+  sharedTaste: 100,
 } as const;
 
 export interface TasteSignal {
@@ -34,9 +20,9 @@ export interface TasteSignal {
 }
 
 export interface CompatibilityBreakdown {
-  score: number;
+  /** Photo taste affinity × 100. Null when there is no photo evidence yet. */
+  score: number | null;
   sharedGoals: boolean;
-  mutualOrientation: boolean;
   /** How much of the pair's shared photo taste earned its points. 0..1. */
   tasteAffinity: number;
   /** Photos both people liked, for the card chip and the breakdown row. */
@@ -53,26 +39,11 @@ export interface CompatibilityBreakdown {
 /** No evidence: the default for every call that does not concern itself with the feed. */
 const NO_TASTE: TasteSignal = { affinity: 0, coLikedPosts: 0, sharedTags: [], reason: null };
 
-function goalAffinity(mine: RelationshipGoal, theirs: RelationshipGoal): number {
-  const rank: Record<RelationshipGoal, number> = {
-    long_term: 3,
-    short_term: 2,
-    casual: 1,
-    friendship: 1,
-    not_sure: 0,
-  };
-  const distance = Math.abs(rank[mine] - rank[theirs]);
-  return Math.max(0, 1 - distance / 3);
-}
-
 /**
- * Scores a candidate out of 100.
+ * Scores a candidate out of 100 based purely on photo taste affinity.
  *
- * `taste` is the photo feed's contribution and is optional, so a caller with no
- * reactions table loaded scores exactly as before rather than crashing. Note what
- * a missing signal now means: with taste at 80, a caller that passes nothing gets
- * a deck ordered almost entirely by the 20 points of stated fact, which is why
- * the deck labels the score provisional until enough photos have been answered.
+ * Returns null when there is no taste signal (affinity = 0), so the UI can show
+ * "No match % yet" instead of a misleading 0%.
  */
 export function scoreCompatibility(
   viewer: User,
@@ -80,19 +51,22 @@ export function scoreCompatibility(
   taste: TasteSignal = NO_TASTE
 ): CompatibilityBreakdown {
   const sharedGoals = viewer.relationshipGoal === candidate.relationshipGoal;
-  const mutualOrientation = viewer.sexualOrientation === candidate.sexualOrientation;
 
-  const raw =
-    taste.affinity * MATCH_WEIGHTS.sharedTaste +
-    goalAffinity(viewer.relationshipGoal, candidate.relationshipGoal) *
-      MATCH_WEIGHTS.relationshipGoal +
-    (mutualOrientation ? 1 : 0) * MATCH_WEIGHTS.mutualOrientation +
-    (candidate.isVerified ? 1 : 0) * MATCH_WEIGHTS.verified;
+  // No photo evidence = no score yet
+  if (taste.affinity <= 0) {
+    return {
+      score: null,
+      sharedGoals,
+      tasteAffinity: 0,
+      coLikedPosts: 0,
+      sharedTags: [],
+      reason: null,
+    };
+  }
 
   return {
-    score: Math.round(Math.min(100, raw)),
+    score: Math.round(Math.min(100, taste.affinity * MATCH_WEIGHTS.sharedTaste)),
     sharedGoals,
-    mutualOrientation,
     tasteAffinity: round2(taste.affinity),
     coLikedPosts: taste.coLikedPosts,
     sharedTags: taste.sharedTags,
@@ -124,7 +98,8 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export function compatibilityLabel(score: number): string {
+export function compatibilityLabel(score: number | null): string {
+  if (score === null) return 'No match % yet';
   if (score >= 80) return 'Strong match';
   if (score >= 60) return 'Good match';
   if (score >= 40) return 'Worth a look';

@@ -146,7 +146,11 @@ export interface TasteSummary {
    * in both directions. It used to be every other account in the database, which
    * let the summary name as "closest" people the deck would never show — the app
    * promising a consequence it had already ruled out. Anything the summary names
-   * is now something the caller can actually be shown.
+   * is now somebody the caller could be shown.
+   *
+   * The deck adds a bar on top: it only carries cards at 80%+. A named person
+   * below that bar is not a broken promise — more photo answers can lift them
+   * over it — but they will not appear in Likes until they do.
    *
    * Ordered by `affinity`, strongest first, because the compact feed strip reads
    * as a list. The full profile screen presents these as a grid, where a grid has
@@ -156,13 +160,13 @@ export interface TasteSummary {
     userId: string;
     name: string;
     /**
-     * The deck's own number: taste plus the stated facts, out of 100.
+     * The deck's own number: photo taste affinity × 100.
      *
+     * Null when the candidate has no stored score (no photo evidence yet).
      * Carried so the profile grid can show the same percentage the deck card
-     * shows. Showing `affinity` there instead meant two different percentages for
-     * the same word "match", on two screens a swipe apart.
+     * shows.
      */
-    score: number;
+    score: number | null;
     /** How much of the pair's evidence is shared photo taste, 0..1. */
     affinity: number;
     /** Photos both people liked. Lets the detail screen rebuild the breakdown. */

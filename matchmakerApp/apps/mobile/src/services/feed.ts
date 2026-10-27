@@ -22,16 +22,16 @@ async function loadTasteIndex(): Promise<TasteIndex> {
 }
 
 /**
- * Builds the deck: everyone whose requirements the two of you both satisfy,
- * best compatibility first.
+ * Builds the deck: the people whose requirements you both satisfy *and* whose
+ * photo score has reached 80%, best first.
  *
  * Eligibility and scoring are deliberately separate. `mutualGate` decides
  * who is allowed to appear at all, in both directions, and knows nothing about the score;
  * `scoreCompatibility` ranks the people who survived and knows nothing about
- * distance. Collapsing them would mean either a good score could pull someone
- * back into a deck their stated requirements exclude them from, or a distance
- * limit could flatten the ordering of everyone inside it, and both of those were
- * explicitly not what the weights are for.
+ * distance. On top of both, the deck only carries strong matches: a card with
+ * no percentage, or a weak one, is a number that does not mean anything yet,
+ * and an empty deck with an explanation beats a screenful of guesses. The API
+ * route applies the same bar in SQL; the two must not drift.
  *
  * Scoring runs before filtering rather than after, so the breakdown that sorts
  * the deck is the same object the cards render. Computing it for people who get
@@ -51,11 +51,9 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     loadTasteIndex(),
   ]);
 
-  // The deck refuses to rank on nothing. With zero likes the only points left are
-  // the twenty of stated fact — goal, orientation, verified — and a deck ordered
-  // by those handed a brand new account an "11% match" card that meant nothing
-  // at all. An empty deck that says why is honest; a weak number dressed up as
-  // a match is not.
+  // The deck refuses to rank on nothing. With zero likes there are no photo
+  // signals, so every candidate would score null. An empty deck that says why
+  // is honest; a weak number dressed up as a match is not.
   //
   // A like, specifically, not an answer: dislikes never become shared evidence,
   // they only steer the feed, so a history of nothing but passes leaves the
@@ -95,13 +93,19 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     return true;
   });
 
-  eligible.sort((a, b) => b.breakdown.score - a.breakdown.score);
+  eligible.sort((a, b) => {
+    // Null scores (no photo evidence) sort last
+    if (a.breakdown.score === null && b.breakdown.score === null) return 0;
+    if (a.breakdown.score === null) return 1;
+    if (b.breakdown.score === null) return -1;
+    return b.breakdown.score - a.breakdown.score;
+  });
+
+  // Only show strong matches (80%+)
+  const strongMatches = eligible.filter(({ breakdown }) => breakdown.score !== null && breakdown.score >= 80);
 
   const start = (page - 1) * pageSize;
-  // The breakdown that sorted this page is the one the card renders. Recomputing
-  // it at render time would drop the taste bonus the sort used, so the card
-  // would show a different percentage from the one that put it in this position.
-  const items = eligible
+  const items = strongMatches
     .slice(start, start + pageSize)
     .map(({ user, breakdown }) => ({ user: toPublicUser(user), compatibility: breakdown }));
 
@@ -109,11 +113,13 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     items,
     page,
     pageSize,
-    total: eligible.length,
-    hasMore: start + pageSize < eligible.length,
-    // Only on an empty deck. On page 2 of a healthy one, "most people here are
-    // blocked by your age range" would be true and useless.
-    blockedReason: eligible.length === 0 ? summariseBlockers(blocked) : null,
+    total: strongMatches.length,
+    hasMore: start + pageSize < strongMatches.length,
+    blockedReason: strongMatches.length === 0
+      ? eligible.length > 0
+        ? 'No strong matches yet — like more photos to find them.'
+        : summariseBlockers(blocked)
+      : null,
     needsTaste: false,
   };
 }

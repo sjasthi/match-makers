@@ -41,6 +41,15 @@ describe('normaliseTag', () => {
     expect(normaliseTag('analysis')).toBe('analysis');
   });
 
+  it('leaves a word ending in as alone', () => {
+    // `Christmas` is not the plural of `Christma`. The guard costs `pizzas`
+    // not folding to `pizza`, which the doc comment owns: a chip spelling a
+    // real word wrong is worse than two spellings of a plural staying apart.
+    expect(normaliseTag('christmas')).toBe('christmas');
+    expect(normaliseTag('Christmas')).toBe('christmas');
+    expect(normaliseTag('canvas')).toBe('canvas');
+  });
+
   it('leaves a short word alone even when it ends in s', () => {
     // Length guard, so `gas` does not become `ga`.
     expect(normaliseTag('gas')).toBe('gas');

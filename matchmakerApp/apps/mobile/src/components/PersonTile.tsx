@@ -6,8 +6,8 @@ import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 export interface PersonTileProps {
   userId: string;
   name: string;
-  /** The deck's own number, 0-100. One meaning for the word "match" app-wide. */
-  score: number;
+  /** The deck's own number, 0-100. One meaning for the word "match" app-wide. Null when no photo evidence yet. */
+  score: number | null;
   /**
    * The band the score falls into, when the server supplied one.
    *
@@ -49,7 +49,7 @@ export function PersonTile({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${name}, ${score}% match${reason ? `. ${reason}` : ''}`}
+      accessibilityLabel={`${name}${score !== null ? `, ${score}% match` : ', no match % yet'}${reason ? `. ${reason}` : ''}`}
       style={styles.tile}
       testID={`${testPrefix}-${userId}`}
     >
@@ -60,7 +60,7 @@ export function PersonTile({
       </Text>
 
       <Text variant="titleMedium" style={styles.score}>
-        {score}%
+        {score !== null ? `${score}%` : 'No match % yet'}
       </Text>
 
       {band && band !== '50+' && band !== 'below-50' ? (

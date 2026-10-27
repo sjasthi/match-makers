@@ -28,9 +28,8 @@ interface FeedPage {
 }
 
 interface CompatibilityBreakdown {
-  score: number;
+  score: number | null;
   sharedGoals: boolean;
-  mutualOrientation: boolean;
   tasteAffinity: number;
   coLikedPosts: number;
   sharedTags: string[];
@@ -50,22 +49,23 @@ const feedQuerySchema = z.object({
  * alternative was computing the whole pool's affinity on every request, which
  * measured at 569ms over 400,000 rows.
  *
- * A candidate with no stored score falls back to the stated facts alone, which
- * is the honest answer for somebody nobody has rescored yet: their goal, their
- * orientation, whether they are verified. Twenty points at most.
+ * Only strong matches (80%+) are kept. A candidate with no stored score, or
+ * one below the bar, is simply not in the deck: the percentage is photo taste
+ * and nothing else, and showing a card that admits it has no number yet is a
+ * worse promise than an empty deck that says why.
  */
 interface CandidateRow extends UserRow {
   distance_km: number | null;
   total_count: string;
+  /** Set by the outer query: how many strong matches exist in total. */
+  strong_total: string;
   photos: PhotoRow[] | null;
   stored_score: number | null;
   stored_affinity: number | null;
   stored_co_liked: number | null;
   stored_tags: string[] | null;
   stored_band: string | null;
-  goal_affinity: number;
   shared_goals: boolean;
-  mutual_orientation: boolean;
 }
 
 /**
@@ -74,6 +74,11 @@ interface CandidateRow extends UserRow {
  * `utils/eligibility.ts` builds a `mutualGate` and runs it in both directions
  * over every user in the database; that gate lives in SQL now, and the ranking
  * is a stored result rather than something computed per request.
+ *
+ * Only strong matches come back: a card needs a stored photo score of 80%+ to
+ * appear at all. The percentage is photo taste and nothing else, so a deck of
+ * unrated or weakly-rated cards is a deck of numbers that do not mean anything
+ * yet -- and an empty deck with an explanation beats a screenful of guesses.
  *
  * Both directions are load-bearing. The caller's filters decide what they are
  * shown, but a candidate whose own filters exclude the caller is someone who
@@ -94,7 +99,7 @@ feedRouter.get(
         ${eligibilitySql()}
       ),
       viewer AS (
-        SELECT relationship_goal, sexual_orientation FROM users WHERE id = $1
+        SELECT relationship_goal FROM users WHERE id = $1
       ),
       scored AS (
         SELECT
@@ -104,50 +109,38 @@ feedRouter.get(
           ms.co_liked_count  AS stored_co_liked,
           ms.shared_tags     AS stored_tags,
           ms.band            AS stored_band,
-          -- The stated facts, so a candidate nobody has rescored still has a
-          -- score rather than a blank card.
-          GREATEST(0, 1 - abs(
-            CASE viewer.relationship_goal
-              WHEN 'long_term' THEN 3 WHEN 'short_term' THEN 2 WHEN 'casual' THEN 1
-              WHEN 'friendship' THEN 1 WHEN 'not_sure' THEN 0 END
-            - CASE eligible.relationship_goal
-              WHEN 'long_term' THEN 3 WHEN 'short_term' THEN 2 WHEN 'casual' THEN 1
-              WHEN 'friendship' THEN 1 WHEN 'not_sure' THEN 0 END
-          )::float / 3) AS goal_affinity,
-          (viewer.relationship_goal = eligible.relationship_goal) AS shared_goals,
-          (viewer.sexual_orientation = eligible.sexual_orientation) AS mutual_orientation,
-          round(
-            10 * GREATEST(0, 1 - abs(
-              CASE viewer.relationship_goal
-                WHEN 'long_term' THEN 3 WHEN 'short_term' THEN 2 WHEN 'casual' THEN 1
-                WHEN 'friendship' THEN 1 WHEN 'not_sure' THEN 0 END
-              - CASE eligible.relationship_goal
-                WHEN 'long_term' THEN 3 WHEN 'short_term' THEN 2 WHEN 'casual' THEN 1
-                WHEN 'friendship' THEN 1 WHEN 'not_sure' THEN 0 END
-            )::float / 3)
-            + 6 * (viewer.sexual_orientation = eligible.sexual_orientation)::int
-            + 4 * eligible.is_verified::int
-          ) AS fallback_score
+          (viewer.relationship_goal = eligible.relationship_goal) AS shared_goals
         FROM eligible
         CROSS JOIN viewer
         LEFT JOIN match_scores ms
           ON ms.viewer_id = $1 AND ms.candidate_id = eligible.id
+      ),
+      strong_matches AS (
+        SELECT
+          scored.*,
+          stored_score AS score
+        FROM scored
+        WHERE stored_score IS NOT NULL
+          AND stored_score >= 80
       )
       SELECT
-        scored.*,
-        -- The stored score when there is one, the stated facts otherwise.
-        COALESCE(stored_score, fallback_score) AS score
-      FROM scored
+        strong_matches.*,
+        -- How many strong matches exist across the whole filtered set,
+        -- computed before LIMIT so paging knows the real size. Named apart
+        -- from total_count (the eligible-pool count the gate carries) so the
+        -- two numbers cannot overwrite each other in the row object.
+        COUNT(*) OVER ()::text AS strong_total
+      FROM strong_matches
       ORDER BY score DESC, created_at DESC, id
       LIMIT $2 OFFSET $3
       `,
       [viewerId, pageSize, (page - 1) * pageSize]
     );
 
-    // `COUNT(*) OVER ()` runs over the filtered set before LIMIT, so `total` is
-    // the real number of matches rather than "however many came back". It is
-    // null on an empty page, hence the `?? 0`.
-    const total = rows.length > 0 ? Number(rows[0]?.total_count ?? 0) : 0;
+    // `COUNT(*) OVER ()` runs over the strong-match set before LIMIT, so
+    // `total` is the real number of cards rather than "however many came back".
+    // It is null on an empty page, hence the `?? 0`.
+    const total = rows.length > 0 ? Number(rows[0]?.strong_total ?? 0) : 0;
 
     // The viewer's own like count, for the provisional flag. Below ten answers
     // the number genuinely is provisional -- every pair looks alike because there
@@ -163,15 +156,14 @@ feedRouter.get(
       items: rows.map((row) => ({
         user: toCandidate(row),
         compatibility: {
-          score: effectiveScore(row),
+          score: row.stored_score,
           sharedGoals: row.shared_goals,
-          mutualOrientation: row.mutual_orientation,
           tasteAffinity: row.stored_affinity ?? 0,
           coLikedPosts: row.stored_co_liked ?? 0,
           sharedTags: row.stored_tags ?? [],
           reason: describeAffinity(row.stored_co_liked ?? 0, row.stored_tags ?? []),
         },
-        band: row.stored_band ?? bandFor(effectiveScore(row)),
+        band: row.stored_band ?? (row.stored_score !== null ? bandFor(row.stored_score) : 'below-50'),
       })),
       page,
       pageSize,
@@ -184,20 +176,6 @@ feedRouter.get(
     send(res, result);
   })
 );
-
-/**
- * The score to show for a candidate.
- *
- * The stored one when the rescore has run, the stated facts otherwise. Both are
- * out of 100 and capped there, the same as the client's `scoreCompatibility`.
- */
-function effectiveScore(row: CandidateRow): number {
-  if (row.stored_score !== null) return row.stored_score;
-
-  const stated =
-    10 * row.goal_affinity + 6 * (row.mutual_orientation ? 1 : 0) + 4 * (row.is_verified ? 1 : 0);
-  return Math.round(Math.min(100, stated));
-}
 
 /**
  * Candidate row -> `User`.
@@ -254,6 +232,17 @@ async function explainEmptyDeck(viewerId: string): Promise<string | null> {
 
   if (Number(rows[0]?.others ?? 0) === 0) {
     return 'Nobody else has signed up yet. Add a few more profiles and this deck will fill up.';
+  }
+
+  // Check if there are eligible profiles but none with 80%+ score
+  const { rows: eligibleRows } = await pool.query<{ count: string }>(
+    `WITH eligible AS (${eligibilitySql()}) SELECT count(*)::text AS count FROM eligible`,
+    [viewerId]
+  );
+  const eligibleCount = Number(eligibleRows[0]?.count ?? 0);
+
+  if (eligibleCount > 0) {
+    return 'No strong matches yet — like more photos to find them.';
   }
 
   return 'Nobody here matches your preferences right now. Widening your age range, distance or goals will help.';

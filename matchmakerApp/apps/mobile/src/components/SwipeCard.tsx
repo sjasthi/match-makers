@@ -205,7 +205,9 @@ export const SwipeCard = memo(function SwipeCard({
 
             <View style={styles.chipRow}>
               <Chip compact style={styles.compatibilityChip} textStyle={styles.compatibilityText}>
-                {`${compatibilityLabel(compatibility.score)} · ${compatibility.score}%`}
+                {compatibility.score !== null
+                  ? `${compatibilityLabel(compatibility.score)} · ${compatibility.score}%`
+                  : compatibilityLabel(compatibility.score)}
               </Chip>
               {compatibility.sharedGoals ? (
                 <Chip compact style={styles.goalChip} textStyle={styles.compatibilityText}>

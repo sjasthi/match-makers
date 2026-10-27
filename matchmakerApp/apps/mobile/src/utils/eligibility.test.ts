@@ -59,7 +59,10 @@ function makeUser(overrides: Partial<User> = {}): User {
 
 describe('checkEligibility', () => {
   it('accepts a pair that meets every requirement', () => {
-    const result = checkEligibility(makeUser(), makeUser({ id: 'user_b' }));
+    // Use compatible orientations: straight male + straight female
+    const seeker = makeUser({ id: 'user_a', gender: Gender.MALE, sexualOrientation: SexualOrientation.STRAIGHT });
+    const target = makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT });
+    const result = checkEligibility(seeker, target);
     expect(result.eligible).toBe(true);
     expect(result.failures).toEqual([]);
   });
@@ -71,15 +74,18 @@ describe('checkEligibility', () => {
 
   describe('age', () => {
     it('rejects someone outside the stated range', () => {
-      const older = makeUser({ id: 'user_b', dateOfBirth: '1970-01-01' });
-      expect(checkEligibility(makeUser(), older).failures).toContain('age');
+      const seeker = makeUser({ gender: Gender.MALE, sexualOrientation: SexualOrientation.STRAIGHT });
+      const older = makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT, dateOfBirth: '1970-01-01' });
+      expect(checkEligibility(seeker, older).failures).toContain('age');
     });
 
     it('accepts both ends of the range inclusively', () => {
       const viewer = makeUser({
+        gender: Gender.MALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
         preferences: preferences({ ageRange: { min: 30, max: 35 } }),
       });
-      const exactlyMin = makeUser({ id: 'user_b', dateOfBirth: '1995-06-15' });
+      const exactlyMin = makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT, dateOfBirth: '1995-06-15' });
       expect(checkEligibility(viewer, exactlyMin).eligible).toBe(true);
     });
   });
@@ -125,19 +131,22 @@ describe('checkEligibility', () => {
     });
 
     it('rejects someone outside the radius', () => {
-      const far = makeUser({ id: 'user_b', location: DALLAS });
-      expect(checkEligibility(makeUser(), far).failures).toContain('distance');
+      // Seeker: straight male, Target: straight female (compatible)
+      const seeker = makeUser({ gender: Gender.MALE, sexualOrientation: SexualOrientation.STRAIGHT });
+      const far = makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT, location: DALLAS });
+      expect(checkEligibility(seeker, far).failures).toContain('distance');
     });
 
     it('treats the radius as inclusive of the exact boundary', () => {
-      const dallasDistance = checkEligibility(
-        makeUser(),
-        makeUser({ id: 'user_b', location: DALLAS })
-      ).distanceKm;
+      const seeker = makeUser({ gender: Gender.MALE, sexualOrientation: SexualOrientation.STRAIGHT });
+      const target = makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT, location: DALLAS });
+      const dallasDistance = checkEligibility(seeker, target).distanceKm;
       const viewer = makeUser({
+        gender: Gender.MALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
         preferences: preferences({ maxDistance: Math.ceil(dallasDistance ?? 0) }),
       });
-      expect(checkEligibility(viewer, makeUser({ id: 'user_b', location: DALLAS })).eligible).toBe(
+      expect(checkEligibility(viewer, makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT, location: DALLAS })).eligible).toBe(
         true
       );
     });
@@ -146,9 +155,11 @@ describe('checkEligibility', () => {
       // The escape hatch has to actually escape, including for someone on the
       // other side of the planet.
       const global = makeUser({
+        gender: Gender.MALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
         preferences: preferences({ distanceMode: 'global', maxDistance: 5 }),
       });
-      const singapore = makeUser({ id: 'user_b', location: SINGAPORE });
+      const singapore = makeUser({ id: 'user_b', gender: Gender.FEMALE, sexualOrientation: SexualOrientation.STRAIGHT, location: SINGAPORE });
       const result = checkEligibility(global, singapore);
       expect(result.eligible).toBe(true);
       // Still measured, so a card can say how far away they are.
@@ -158,23 +169,51 @@ describe('checkEligibility', () => {
     it('excludes a profile with no location from a nearby seeker', () => {
       // Failing closed on the other person's missing data. The alternative is
       // quietly widening everyone's radius to cover whoever never set one.
-      const unlocated = makeUser({ id: 'user_b', location: NOWHERE });
-      const result = checkEligibility(makeUser(), unlocated);
+      const unlocated = makeUser({
+        id: 'user_b',
+        gender: Gender.FEMALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
+        location: NOWHERE,
+      });
+      // Seeker: straight male (attracted to female)
+      const seeker = makeUser({
+        gender: Gender.MALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
+      });
+      const result = checkEligibility(seeker, unlocated);
       expect(result.failures).toContain('missing_location');
       expect(result.distanceKm).toBeNull();
     });
 
     it('still shows an unlocated profile to a global seeker', () => {
-      const global = makeUser({ preferences: preferences({ distanceMode: 'global' }) });
-      const unlocated = makeUser({ id: 'user_b', location: NOWHERE });
+      const global = makeUser({
+        gender: Gender.MALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
+        preferences: preferences({ distanceMode: 'global' }),
+      });
+      const unlocated = makeUser({
+        id: 'user_b',
+        gender: Gender.FEMALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
+        location: NOWHERE,
+      });
       expect(checkEligibility(global, unlocated).eligible).toBe(true);
     });
 
     it('falls back to global when the seeker is the one with no location', () => {
       // Failing open on your own data. Excluding here would empty the viewer's
       // own deck and the emptiness would read as "nobody matches you".
-      const unlocatedSeeker = makeUser({ location: NOWHERE });
-      const far = makeUser({ id: 'user_b', location: SINGAPORE });
+      const unlocatedSeeker = makeUser({
+        gender: Gender.MALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
+        location: NOWHERE,
+      });
+      const far = makeUser({
+        id: 'user_b',
+        gender: Gender.FEMALE,
+        sexualOrientation: SexualOrientation.STRAIGHT,
+        location: SINGAPORE,
+      });
       expect(checkEligibility(unlocatedSeeker, far).eligible).toBe(true);
     });
 
@@ -216,10 +255,18 @@ function blockersFor(seeker: User, target: User): BlockerCode[] {
 describe('the mutual gate', () => {
   it('requires the target to pass, not just the seeker', () => {
     // The whole point: a one-way filter shows you people who filtered you out.
-    const seeker = makeUser({ id: 'user_a' });
+    // Seeker: straight male (wants females). ExcludesYou: straight female who only wants females.
+    // Seeker can see ExcludesYou (female), but ExcludesYou filters out Seeker (male).
+    const seeker = makeUser({
+      id: 'user_a',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
     const excludesYou = makeUser({
       id: 'user_b',
-      preferences: preferences({ genders: [Gender.MALE] }),
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+      preferences: preferences({ genders: [Gender.FEMALE] }),
     });
     expect(checkEligibility(seeker, excludesYou).eligible).toBe(true);
     expect(passesBothWays(seeker, excludesYou)).toBe(false);
@@ -237,11 +284,19 @@ describe('the mutual gate', () => {
     // limit excludes and a 500 km limit does not.
     const fifteenKmAway = { ...AUSTIN, latitude: 30.4, longitude: -97.7431 };
 
+    // Use compatible orientations: straight male + straight female
     const strictViewer = makeUser({
       id: 'user_a',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
       preferences: preferences({ maxDistance: 10 }),
     });
-    const target = makeUser({ id: 'user_b', location: fifteenKmAway });
+    const target = makeUser({
+      id: 'user_b',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+      location: fifteenKmAway,
+    });
 
     expect(passesBothWays(strictViewer, target)).toBe(false);
     expect(passesBothWays(target, strictViewer)).toBe(false);
@@ -249,15 +304,24 @@ describe('the mutual gate', () => {
     // Same pair, same distance, but nobody is asking for anything tighter.
     const relaxedViewer = makeUser({
       id: 'user_c',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
       preferences: preferences({ maxDistance: 500 }),
     });
     expect(passesBothWays(relaxedViewer, target)).toBe(true);
   });
 
   it('lets one side being global rescue a pair the other would limit', () => {
-    const nearbyOnly = makeUser({ id: 'user_a' });
+    // Use compatible orientations: straight male + straight female
+    const nearbyOnly = makeUser({
+      id: 'user_a',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
     const global = makeUser({
       id: 'user_b',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
       preferences: preferences({ distanceMode: 'global' }),
       location: SINGAPORE,
     });
@@ -290,13 +354,18 @@ describe('the mutual gate', () => {
   it('lets a perfect taste match through when the goals overlap', () => {
     // The gate is the floor, not the ranking. People who are each open to the
     // other's goal are still ordered by taste afterwards.
+    // Use straight male + straight female (orientation compatible)
     const longTerm = makeUser({
       id: 'user_a',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
       relationshipGoal: RelationshipGoal.LONG_TERM,
       preferences: preferences({ relationshipGoals: [RelationshipGoal.LONG_TERM] }),
     });
     const alsoLongTerm = makeUser({
       id: 'user_b',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
       relationshipGoal: RelationshipGoal.LONG_TERM,
       preferences: preferences({ relationshipGoals: [RelationshipGoal.LONG_TERM] }),
     });
@@ -322,10 +391,79 @@ describe('the mutual gate', () => {
     expect(blockersFor(casual, noPreference)).toContain('goal');
   });
 
-  it('does not gate on sexual orientation, which stays a scoring signal', () => {
+  it('gates on sexual orientation compatibility (mutual)', () => {
+    // Straight female (attracted to male) + gay female (attracted to female)
+    // -> straight female NOT attracted to gay female, so mutual gate fails
     const straight = makeUser({ id: 'user_a', sexualOrientation: SexualOrientation.STRAIGHT });
     const gay = makeUser({ id: 'user_b', sexualOrientation: SexualOrientation.GAY });
-    expect(passesBothWays(straight, gay)).toBe(true);
+    expect(passesBothWays(straight, gay)).toBe(false);
+    expect(blockersFor(straight, gay)).toContain('orientation');
+    expect(blockersFor(gay, straight)).toContain('orientation');
+  });
+
+  it('allows straight female + straight male (compatible)', () => {
+    const straightFemale = makeUser({
+      id: 'user_a',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
+    const straightMale = makeUser({
+      id: 'user_b',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
+    expect(passesBothWays(straightFemale, straightMale)).toBe(true);
+  });
+
+  it('allows bisexual user with anyone (wildcard FROM them, mutual if other is compatible)', () => {
+    // Bi male + straight female (straight female attracted to male, bi is wildcard)
+    const bi = makeUser({
+      id: 'user_a',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.BISEXUAL,
+    });
+    const straightFemale = makeUser({
+      id: 'user_b',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
+    // Bi female + straight male (straight male attracted to female, bi is wildcard)
+    const biFemale = makeUser({
+      id: 'user_c',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.BISEXUAL,
+    });
+    const straightMale = makeUser({
+      id: 'user_d',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
+    // Bi female + gay male: bi -> gayMale passes (wildcard), but gayMale -> biFemale FAILS (gay male wants male)
+    // This demonstrates the mutual gate: BOTH must be compatible
+    const gayMale = makeUser({
+      id: 'user_e',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.GAY,
+    });
+    expect(passesBothWays(bi, straightFemale)).toBe(true);
+    expect(passesBothWays(biFemale, straightMale)).toBe(true);
+    expect(passesBothWays(biFemale, gayMale)).toBe(false); // mutual gate: gay male not attracted to female
+    // But biFemale -> gayMale direction alone passes
+    expect(checkEligibility(biFemale, gayMale).eligible).toBe(true);
+    expect(checkEligibility(gayMale, biFemale).eligible).toBe(false);
+  });
+
+  it('allows prefer_not_to_say with anyone (wildcard)', () => {
+    const pnts = makeUser({
+      id: 'user_a',
+      sexualOrientation: SexualOrientation.PREFER_NOT_TO_SAY,
+    });
+    const straightMale = makeUser({
+      id: 'user_b',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+    });
+    expect(passesBothWays(pnts, straightMale)).toBe(true);
   });
 });
 

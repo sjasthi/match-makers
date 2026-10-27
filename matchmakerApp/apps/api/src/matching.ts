@@ -41,7 +41,7 @@ const CONFIDENCE_MIN_LIKES = 5;
 export const PHOTOS_FOR_FULL_TASTE = 10;
 
 /** The client's `MATCH_WEIGHTS`, out of 100. */
-export const MATCH_WEIGHTS = { taste: 80, goal: 10, orientation: 6, verified: 4 } as const;
+export const MATCH_WEIGHTS = { taste: 100 } as const;
 
 /**
  * The bands a match percentage falls into.
@@ -62,22 +62,6 @@ export function bandFor(score: number): string {
     if (score >= band.floor) return band.label;
   }
   return 'below-50';
-}
-
-/**
- * The goal-orientation rank, as the client's `goalAffinity` defines it.
- *
- * A literal CASE rather than a lookup table, because the values are fixed and
- * five comparisons are cheaper than a join.
- */
-function goalRank(column: string): string {
-  return `CASE ${column}
-            WHEN 'long_term'  THEN 3
-            WHEN 'short_term' THEN 2
-            WHEN 'casual'     THEN 1
-            WHEN 'friendship' THEN 1
-            WHEN 'not_sure'   THEN 0
-          END`;
 }
 
 /**
@@ -112,7 +96,7 @@ function rankingCtes(eligibilitySql: string): string {
       ${eligibilitySql}
     ),
     viewer_meta AS (
-      SELECT relationship_goal, sexual_orientation FROM users WHERE id = $1
+      SELECT relationship_goal FROM users WHERE id = $1
     ),
     /*
      * The viewer's half, from the summary row: their like count and how many
@@ -244,10 +228,8 @@ function rankingCtes(eligibilitySql: string): string {
         COALESCE(co.co_count, 0) AS co_liked_count,
         COALESCE(ov.shared_tags, '{}') AS shared_tags,
 
-        -- The client's goalAffinity: distance on a fixed ladder.
-        GREATEST(0, 1 - abs(${goalRank('viewer_meta.relationship_goal')} - ${goalRank('ranked.relationship_goal')})::float / 3) AS goal_affinity,
-        (viewer_meta.relationship_goal = ranked.relationship_goal) AS shared_goals,
-        (viewer_meta.sexual_orientation = ranked.sexual_orientation) AS mutual_orientation
+        -- Kept for informational display only (not used in scoring).
+        (viewer_meta.relationship_goal = ranked.relationship_goal) AS shared_goals
       FROM ranked
       LEFT JOIN ov ON ov.user_id = ranked.id
       LEFT JOIN co ON co.user_id = ranked.id
@@ -260,13 +242,8 @@ function rankingCtes(eligibilitySql: string): string {
     final AS (
       SELECT
         scored.*,
-        -- The client's scoreCompatibility, out of 100 and capped there.
-        round(LEAST(100,
-          ${MATCH_WEIGHTS.taste} * scored.taste_affinity
-          + ${MATCH_WEIGHTS.goal} * scored.goal_affinity
-          + ${MATCH_WEIGHTS.orientation} * (scored.mutual_orientation::int)
-          + ${MATCH_WEIGHTS.verified} * (scored.is_verified::int)
-        )) AS score
+        -- Score is now purely photo taste affinity × 100.
+        round(LEAST(100, ${MATCH_WEIGHTS.taste} * scored.taste_affinity)) AS score
       FROM scored
     )
   `;
