@@ -338,3 +338,107 @@ export async function deletePost(id: string): Promise<boolean> {
   assertMockMode();
   return withMockNetwork(() => mockDb.deletePost(id));
 }
+
+/* -------------------------------------------------------------------------- */
+/* Verification review                                                        */
+/* -------------------------------------------------------------------------- */
+
+export interface AdminVerificationSubmission {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  userIsVerified: boolean;
+  userVerificationStatus: string;
+  imageData: string;
+  imageMime: string;
+  status: string;
+  submittedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+}
+
+/**
+ * All pending verification submissions, newest first.
+ */
+export async function listPendingVerifications(): Promise<AdminVerificationSubmission[]> {
+  if (getAuthAdapter().mode !== 'mock') {
+    return requestWithData<AdminVerificationSubmission[]>({
+      method: 'GET',
+      url: '/admin/verifications/pending',
+    });
+  }
+
+  assertMockMode();
+
+  return withMockNetwork(async () => {
+    const submissions = await mockDb.getPendingVerificationSubmissions();
+    // Enrich with user info
+    const enriched = await Promise.all(
+      submissions.map(async (sub) => {
+        const user = await mockDb.findUserById(sub.userId);
+        return {
+          id: sub.id,
+          userId: sub.userId,
+          userEmail: user?.email ?? '',
+          userName: user?.name ?? '',
+          userIsVerified: user?.isVerified ?? false,
+          userVerificationStatus: sub.status,
+          imageData: sub.imageData,
+          imageMime: sub.imageMime,
+          status: sub.status,
+          submittedAt: sub.submittedAt,
+          reviewedAt: sub.reviewedAt,
+          reviewedBy: sub.reviewedBy,
+          rejectionReason: sub.rejectionReason,
+        };
+      })
+    );
+    return enriched;
+  });
+}
+
+/**
+ * Accept a pending verification submission.
+ */
+export async function acceptVerification(submissionId: string): Promise<boolean> {
+  if (getAuthAdapter().mode !== 'mock') {
+    const { accepted } = await requestWithData<{ accepted: boolean }>({
+      method: 'POST',
+      url: '/admin/verifications/accept',
+      data: { submissionId },
+    });
+    return accepted;
+  }
+
+  assertMockMode();
+
+  const admin = await getAuthAdapter().getCurrentUser();
+  if (!admin) throw new Error('Sign in as an admin to review verifications');
+  const adminUserId = admin.id;
+  return withMockNetwork(() => mockDb.acceptVerificationSubmission(submissionId, adminUserId));
+}
+
+/**
+ * Decline a pending verification submission.
+ */
+export async function declineVerification(submissionId: string, reason: string): Promise<boolean> {
+  if (getAuthAdapter().mode !== 'mock') {
+    const { declined } = await requestWithData<{ declined: boolean }>({
+      method: 'POST',
+      url: '/admin/verifications/decline',
+      data: { submissionId, reason },
+    });
+    return declined;
+  }
+
+  assertMockMode();
+
+  const admin = await getAuthAdapter().getCurrentUser();
+  if (!admin) throw new Error('Sign in as an admin to review verifications');
+  const adminUserId = admin.id;
+  return withMockNetwork(() =>
+    mockDb.declineVerificationSubmission(submissionId, adminUserId, reason)
+  );
+}

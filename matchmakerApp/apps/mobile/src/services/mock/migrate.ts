@@ -134,8 +134,9 @@ export function normaliseStateUsers(users: unknown): { users: unknown[]; changed
  *
  * Brings a whole stored mock state up to the current shape.
  *
- * The collections added after the first release (`posts`, `postReactions`) are
- * defaulted to empty rather than triggering a reseed. That distinction matters:
+ * Collections added after the first release (`posts`, `postReactions`, and
+ * `verificationSubmissions`) are defaulted to empty rather than triggering a
+ * reseed. That distinction matters:
  * reseeding is what throws away every account, swipe and message a person has,
  * and the collections are append-only from here, so an account that predates the
  * photo feed loses its feed history and nothing else. A user who has not seen
@@ -149,12 +150,31 @@ export function normaliseStateUsers(users: unknown): { users: unknown[]; changed
 export function normaliseState(state: unknown): { state: unknown; changed: boolean } {
   if (!isRecord(state)) return { state, changed: true };
 
-  const { users, changed: usersChanged } = normaliseStateUsers(state.users);
+  const normalizedUsers = normaliseStateUsers(state.users);
+  const verificationSubmissions = asArray(state.verificationSubmissions);
+  const approvedUserIds = new Set(
+    verificationSubmissions.flatMap((submission) =>
+      isRecord(submission) &&
+      submission.status === 'verified' &&
+      typeof submission.userId === 'string'
+        ? [submission.userId]
+        : []
+    )
+  );
+  let clearedLegacyBadges = false;
+  const users = normalizedUsers.users.map((user) => {
+    if (!isRecord(user) || typeof user.id !== 'string' || user.isVerified !== true) return user;
+    if (approvedUserIds.has(user.id)) return user;
+    clearedLegacyBadges = true;
+    return { ...user, isVerified: false };
+  });
   const posts = normalisePosts(state.posts);
   const postReactions = normalisePostReactions(state.postReactions, posts);
 
   const collectionsChanged =
-    !Array.isArray(state.posts) || !Array.isArray(state.postReactions);
+    !Array.isArray(state.posts) ||
+    !Array.isArray(state.postReactions) ||
+    !Array.isArray(state.verificationSubmissions);
 
   return {
     state: {
@@ -162,8 +182,9 @@ export function normaliseState(state: unknown): { state: unknown; changed: boole
       users,
       posts,
       postReactions,
+      verificationSubmissions,
     },
-    changed: usersChanged || collectionsChanged,
+    changed: normalizedUsers.changed || clearedLegacyBadges || collectionsChanged,
   };
 }
 

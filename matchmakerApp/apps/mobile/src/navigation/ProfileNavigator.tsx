@@ -11,6 +11,7 @@ import { AdminUsersScreen } from '@/screens/admin/AdminUsersScreen';
 import { AdminUserDetailScreen } from '@/screens/admin/AdminUserDetailScreen';
 import { AdminPostsScreen } from '@/screens/admin/AdminPostsScreen';
 import { AdminPostImportScreen } from '@/screens/admin/AdminPostImportScreen';
+import { AdminVerificationsScreen } from '@/screens/admin/AdminVerificationsScreen';
 import type { ProfileStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<ProfileStackParamList>();
@@ -76,6 +77,11 @@ export function ProfileNavigator() {
         name="AdminPostImport"
         component={AdminPostImportScreen}
         options={{ title: 'Import photos' }}
+      />
+      <Stack.Screen
+        name="AdminVerifications"
+        component={AdminVerificationsScreen}
+        options={{ title: 'Verification review' }}
       />
     </Stack.Navigator>
   );

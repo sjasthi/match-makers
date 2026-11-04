@@ -223,6 +223,7 @@ describe('normaliseState (photo feed collections)', () => {
       swipes: [],
       matches: [],
       messages: [],
+      verificationSubmissions: [],
       ...overrides,
     };
   }
@@ -239,6 +240,7 @@ describe('normaliseState (photo feed collections)', () => {
     expect(changed).toBe(true);
     expect((state as { posts: unknown[] }).posts).toEqual([]);
     expect((state as { postReactions: unknown[] }).postReactions).toEqual([]);
+    expect((state as { verificationSubmissions: unknown[] }).verificationSubmissions).toEqual([]);
   });
 
   it('keeps the accounts rather than triggering a reseed', () => {
@@ -256,7 +258,13 @@ describe('normaliseState (photo feed collections)', () => {
       baseState({
         posts: [CAT_POST, MUSIC_POST],
         postReactions: [
-          { id: 'r1', userId: 'user_demo', postId: 'post_cat', action: 'like', createdAt: '2026-01-03' },
+          {
+            id: 'r1',
+            userId: 'user_demo',
+            postId: 'post_cat',
+            action: 'like',
+            createdAt: '2026-01-03',
+          },
         ],
       })
     );
@@ -331,10 +339,7 @@ describe('normaliseState (photo feed collections)', () => {
       })
     );
 
-    expect((state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags).toEqual([
-      'dog',
-      'cat',
-    ]);
+    expect((state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags).toEqual(['dog', 'cat']);
   });
 
   it('caps a tag list that outgrew the limit', () => {
@@ -352,9 +357,9 @@ describe('normaliseState (photo feed collections)', () => {
       })
     );
 
-    expect(
-      (state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags
-    ).toHaveLength(MAX_POST_TAGS);
+    expect((state as { posts: Array<{ tags: string[] }> }).posts[0]?.tags).toHaveLength(
+      MAX_POST_TAGS
+    );
   });
 
   it('drops a reaction pointing at a post that is gone', () => {
@@ -364,8 +369,20 @@ describe('normaliseState (photo feed collections)', () => {
       baseState({
         posts: [CAT_POST],
         postReactions: [
-          { id: 'r1', userId: 'user_demo', postId: 'post_cat', action: 'like', createdAt: '2026-01-03' },
-          { id: 'r2', userId: 'user_demo', postId: 'post_deleted', action: 'like', createdAt: '2026-01-03' },
+          {
+            id: 'r1',
+            userId: 'user_demo',
+            postId: 'post_cat',
+            action: 'like',
+            createdAt: '2026-01-03',
+          },
+          {
+            id: 'r2',
+            userId: 'user_demo',
+            postId: 'post_deleted',
+            action: 'like',
+            createdAt: '2026-01-03',
+          },
         ],
       })
     );
@@ -379,7 +396,13 @@ describe('normaliseState (photo feed collections)', () => {
       baseState({
         posts: [CAT_POST],
         postReactions: [
-          { id: 'r1', userId: 'user_demo', postId: 'post_cat', action: 'love', createdAt: '2026-01-03' },
+          {
+            id: 'r1',
+            userId: 'user_demo',
+            postId: 'post_cat',
+            action: 'love',
+            createdAt: '2026-01-03',
+          },
         ],
       })
     );
@@ -388,10 +411,34 @@ describe('normaliseState (photo feed collections)', () => {
   });
 
   it('leaves a healthy state alone', () => {
-    const { changed } = normaliseState(
-      baseState({ posts: [CAT_POST], postReactions: [] })
-    );
+    const { changed } = normaliseState(baseState({ posts: [CAT_POST], postReactions: [] }));
     expect(changed).toBe(false);
+  });
+
+  it('clears legacy self-awarded badges without an accepted submission', () => {
+    const legacyUser = { ...demo, isVerified: true };
+    const { state, changed } = normaliseState(
+      baseState({ users: [legacyUser], posts: [CAT_POST], postReactions: [] })
+    );
+
+    expect(changed).toBe(true);
+    expect((state as { users: User[] }).users[0]?.isVerified).toBe(false);
+  });
+
+  it('keeps a badge backed by an accepted verification submission', () => {
+    const approvedUser = { ...demo, isVerified: true };
+    const { state } = normaliseState(
+      baseState({
+        users: [approvedUser],
+        posts: [CAT_POST],
+        postReactions: [],
+        verificationSubmissions: [
+          { id: 'verified-1', userId: approvedUser.id, status: 'verified' },
+        ],
+      })
+    );
+
+    expect((state as { users: User[] }).users[0]?.isVerified).toBe(true);
   });
 });
 
@@ -409,7 +456,12 @@ describe('a post stored before the importer wrote two copies', () => {
 
   it('keeps a single-uri post exactly as it was', () => {
     const posts = postsThrough([
-      { id: 'post_old', imageUri: 'file:///cache/1200.jpg', tags: ['dog'], createdAt: '2026-01-01T00:00:00.000Z' },
+      {
+        id: 'post_old',
+        imageUri: 'file:///cache/1200.jpg',
+        tags: ['dog'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
     ]);
 
     // No thumb is derived here. Rewriting every stored photo on load is exactly
@@ -463,7 +515,13 @@ describe('a post stored before the importer wrote two copies', () => {
     // An empty string would send the grid to a file that does not exist, which
     // is worse than falling back to the full image.
     const posts = postsThrough([
-      { id: 'post_empty', imageUri: 'file:///cache/1200.jpg', thumbUri: '', tags: ['dog'], createdAt: '2026-01-01T00:00:00.000Z' },
+      {
+        id: 'post_empty',
+        imageUri: 'file:///cache/1200.jpg',
+        thumbUri: '',
+        tags: ['dog'],
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
     ]);
 
     expect(posts[0]?.thumbUri).toBeUndefined();
@@ -487,7 +545,7 @@ describe('a record written before the photo feed', () => {
     const stored = (state as { users: Array<Record<string, unknown>> }).users[0]!;
     expect(stored.id).toBe(demo.id);
     expect(stored.questionnaire).toEqual({ values: ['kindness'], prompts: [] });
-    // Nothing about the record needed repairing, so nothing was rewritten.
-    expect(changed).toBe(false);
+    // FP8 adds its submissions collection to old records during upgrade.
+    expect(changed).toBe(true);
   });
 });

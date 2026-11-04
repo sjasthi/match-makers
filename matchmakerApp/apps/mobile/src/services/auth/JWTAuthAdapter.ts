@@ -107,6 +107,21 @@ export class JWTAuthAdapter implements AuthAdapter {
     }
   }
 
+  async submitVerification(
+    imageData: string,
+    imageMime: string
+  ): Promise<{ status: VerificationStatus['status']; submittedAt?: string }> {
+    try {
+      const response = await getApiClient().post<VerificationStatus>('/profile/verification', {
+        imageData,
+        imageMime,
+      });
+      return { status: response.data.status, submittedAt: response.data.submittedAt };
+    } catch (error) {
+      throw toAuthError(error);
+    }
+  }
+
   async clear(): Promise<void> {
     const store = this.store;
     await Promise.all([

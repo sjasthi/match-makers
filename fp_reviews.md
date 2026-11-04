@@ -465,20 +465,31 @@ Where it lands
   it; a background worker, so other people's decks still wait for the next batch; and
   any tuning of the numbers against real data, because there is none yet.
 
-[FP8] 10/27/2026
-### Planning user self-verification.
-FP1 asked how we weed out the liars and FP7 left the badge as a claim a person makes
-about themselves (`POST /profile/verification` just flips a flag). The plan for the
-next iteration is to let users verify themselves rather than waiting on us to check
-them, and to make that claim mean something.
+[FP8] 11/03/2026
+### Admin-reviewed photo verification.
+The previous verification endpoint let users award themselves the badge. FP8 replaces
+that with a small manual-review workflow suitable for the capstone demonstration.
 
 Brief:
-- The user starts a check from their own profile and the system confirms it against
-  something they cannot simply assert: a pose/selfie match against their photos, or
-  connecting an already-verified external account.
-- Verification is per claim (identity, photos are current), not one global checkbox,
-  and it expires so an old check cannot vouch for a new set of photos.
-- Admin review stays as the backstop for reports, reusing the `requireAdmin` path
-  from FP6 rather than a new surface.
-- It stays a trust badge. FP7 already took verification out of the score; nothing
-  here puts it back.
+- A user submits one photo from their profile. For the demo, any photo is accepted
+  as an upload; there is no selfie match, ID check, or automated identity check.
+- The submission is `pending` until an administrator accepts or declines it from the
+  verification review queue. An accepted request sets the existing profile badge;
+  a declined request remains unverified and can be resubmitted.
+- Review uses the existing `requireAdmin` middleware. The submitted image is kept
+  separate from public profile photos and is only returned by admin-protected routes.
+- The badge remains visual only. FP7 removed verification from match scoring, and
+  this workflow does not restore it.
+- Since an arbitrary photo cannot prove identity, the demo describes the badge as
+  admin-reviewed rather than a guarantee that the account represents a real person.
+
+[FP9]
+### Real-time updates.
+Address the issue where updates do not appear automatically and require a manual refresh.
+
+Process:
+- Trace the update from the client through the API to the database to find where it stops being reflected.
+- After a change is saved successfully, send an update notification through the existing WebSocket connection.
+- Have connected clients refresh the affected data from the API and update the screen automatically.
+- If the WebSocket is unavailable, fall back to a regular API refresh.
+- Test updates across multiple clients, including when a client disconnects and reconnects.

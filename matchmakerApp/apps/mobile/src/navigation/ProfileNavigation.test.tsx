@@ -1,9 +1,4 @@
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor as rtlWaitFor,
-} from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor as rtlWaitFor } from '@testing-library/react-native';
 import App from '../../App';
 import { mockDb } from '@/services/mock/database';
 import { MockAuthAdapter } from '@/services/auth/MockAuthAdapter';
@@ -24,7 +19,6 @@ jest.setTimeout(30_000);
 function waitFor(callback: () => unknown, options?: { timeout?: number }) {
   return rtlWaitFor(callback, { timeout: 30_000, ...options });
 }
-
 
 beforeEach(async () => {
   useAuthStore.setState({ state: 'unknown', user: null, error: null });
@@ -85,7 +79,7 @@ describe('Profile menu navigation', () => {
 
     fireEvent.press(screen.getByLabelText('Verification'));
 
-    await waitFor(() => expect(screen.getByText('Prove you are real')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Submit a photo for verification')).toBeTruthy());
   });
 
   it('opens Settings from the Profile tab', async () => {

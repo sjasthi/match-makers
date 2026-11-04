@@ -141,7 +141,10 @@ export class MockAuthAdapter implements AuthAdapter {
       throw new AuthError('Profile not found', { code: 'NOT_FOUND' });
     }
 
-    const saved = await mockDb.saveUser({ ...existing, ...updates });
+    // Keep profile edits from becoming a self-service verification bypass.
+    // Only an admin review decision may set this flag.
+    const { isVerified: _ignoredVerificationFlag, ...profileUpdates } = updates;
+    const saved = await mockDb.saveUser({ ...existing, ...profileUpdates });
     return toPublicUser(saved);
   }
 
@@ -154,7 +157,42 @@ export class MockAuthAdapter implements AuthAdapter {
       });
     }
     const user = await mockDb.findUserById(currentUserId);
-    return user?.isVerified ? { status: 'verified', method: 'selfie' } : { status: 'unverified' };
+    if (!user) return { status: 'unverified' };
+
+    // Check for pending/verified/rejected submission in mock db
+    const submission = await mockDb.getLatestVerificationSubmission(currentUserId);
+    if (submission) {
+      return {
+        status: submission.status,
+        submittedAt: submission.submittedAt,
+        reviewedAt: submission.reviewedAt,
+        rejectionReason: submission.rejectionReason,
+      };
+    }
+    return user.isVerified ? { status: 'verified' } : { status: 'unverified' };
+  }
+
+  async submitVerification(
+    imageData: string,
+    imageMime: string
+  ): Promise<{ status: VerificationStatus['status']; submittedAt?: string }> {
+    await simulateLatency();
+    maybeSimulateFailure();
+
+    const currentUserId = await this.currentUserId();
+    if (!currentUserId) {
+      throw new AuthError('You need to be signed in to submit verification', {
+        code: 'UNAUTHORIZED',
+      });
+    }
+
+    const submission = await mockDb.createVerificationSubmission(
+      currentUserId,
+      imageData,
+      imageMime
+    );
+
+    return { status: 'pending', submittedAt: submission.submittedAt };
   }
 
   async clear(): Promise<void> {

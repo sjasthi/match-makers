@@ -101,12 +101,9 @@ BEGIN
     CREATE TYPE message_type AS ENUM ('text', 'image', 'system');
   END IF;
 
-  -- Mirrors `VerificationStatus['status']`.
-  --
-  -- FP1's "honesty and proof" work wanted ID, puzzle and biometric checks plus
-  -- manual admin review. None of that is built; `unverified` is the only status
-  -- anyone can reach today, and the column exists so the later work does not have
-  -- to retrofit one.
+  -- Mirrors `VerificationStatus['status']`. FP8 uses pending/verified/rejected
+  -- for the manual photo-review workflow; `is_verified` remains the public badge
+  -- flag and is kept in sync with this status by the review routes.
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'verification_status') THEN
     CREATE TYPE verification_status AS ENUM ('unverified', 'pending', 'verified', 'rejected');
   END IF;
@@ -566,5 +563,49 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 -- Partial, because revoked tokens are only ever filtered out.
 CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx
   ON refresh_tokens (user_id) WHERE revoked_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- verification_submissions
+-- ---------------------------------------------------------------------------
+-- One row per user submission. A user may have multiple submissions over time
+-- (e.g., resubmitting after rejection), but only the latest pending/verified
+-- one matters for the badge. The image is stored as a base64 data URI for demo
+-- purposes; production would use object storage.
+CREATE TABLE IF NOT EXISTS verification_submissions (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  image_data      text NOT NULL,           -- base64 data URI (demo) or object key (prod)
+  image_mime      text NOT NULL DEFAULT 'image/jpeg',
+  status          verification_status NOT NULL DEFAULT 'pending',
+  submitted_at    timestamptz NOT NULL DEFAULT now(),
+  reviewed_at     timestamptz,
+  reviewed_by     uuid REFERENCES users (id) ON DELETE SET NULL,
+  rejection_reason text
+);
+
+CREATE INDEX IF NOT EXISTS verification_submissions_user_idx
+  ON verification_submissions (user_id, submitted_at DESC);
+
+CREATE INDEX IF NOT EXISTS verification_submissions_pending_idx
+  ON verification_submissions (submitted_at DESC) WHERE status = 'pending';
+
+CREATE UNIQUE INDEX IF NOT EXISTS verification_submissions_one_pending_per_user
+  ON verification_submissions (user_id) WHERE status = 'pending';
+
+-- Before FP8, the verification endpoint let users award themselves the badge.
+-- Keep only approvals that have a corresponding admin-reviewed submission.
+-- This is safe to rerun: accepted FP8 records are retained and all cleared
+-- records stay cleared on subsequent schema applications.
+UPDATE users u
+   SET is_verified = false,
+       verification_status = 'unverified',
+       updated_at = now()
+ WHERE u.is_verified = true
+   AND NOT EXISTS (
+     SELECT 1
+       FROM verification_submissions vs
+      WHERE vs.user_id = u.id
+        AND vs.status = 'verified'
+   );
 
 COMMIT;

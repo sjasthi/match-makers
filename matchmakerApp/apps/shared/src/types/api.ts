@@ -89,8 +89,8 @@ export interface MessageSummary {
 
 export interface VerificationStatus {
   status: 'unverified' | 'pending' | 'verified' | 'rejected';
-  method?: 'document' | 'selfie' | 'phone' | 'email';
   submittedAt?: string;
+  reviewedAt?: string;
   rejectionReason?: string;
 }
 

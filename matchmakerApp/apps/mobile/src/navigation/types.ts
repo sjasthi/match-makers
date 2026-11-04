@@ -61,6 +61,8 @@ export type ProfileStackParamList = {
    */
   AdminPosts: undefined;
   AdminPostImport: undefined;
+  /** Admin verification review queue. */
+  AdminVerifications: undefined;
 };
 
 export type ChatStackParamList = {

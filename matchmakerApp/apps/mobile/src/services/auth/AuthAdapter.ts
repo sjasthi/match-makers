@@ -44,6 +44,10 @@ export interface AuthAdapter extends AuthTransport {
   getCurrentUser(): Promise<User | null>;
   updateProfile(updates: Partial<User>): Promise<User>;
   getVerificationStatus(): Promise<VerificationStatus>;
+  submitVerification(
+    imageData: string,
+    imageMime: string
+  ): Promise<{ status: VerificationStatus['status']; submittedAt?: string }>;
 }
 
 export type SessionState = 'unknown' | 'authenticated' | 'anonymous' | 'needs_onboarding';

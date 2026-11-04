@@ -1,7 +1,6 @@
 import type { User, VerificationStatus } from '@match-makers/shared';
 import { APP_CONFIG } from '@/constants';
 import { getAuthAdapter } from '@/services/auth';
-import { getApiClient } from '@/services/api/client';
 
 /** True while the profile is too incomplete to show in the feed. */
 export function isProfileComplete(user: User | null): boolean {
@@ -70,19 +69,11 @@ export async function fetchVerificationStatus(): Promise<VerificationStatus> {
 }
 
 /**
- * Stand-in for a real verification submission. The FP1 notes called for a
- * low-friction proof flow, so this only records intent and flips the badge.
+ * Submit a verification photo for admin review.
+ *
+ * Creates a pending submission. Does NOT award the badge immediately.
+ * The badge is only awarded after an admin accepts the submission.
  */
-export async function submitVerification(method: VerificationStatus['method']) {
-  const adapter = getAuthAdapter();
-  if (adapter.mode === 'mock') {
-    const user = await adapter.getCurrentUser();
-    if (!user) throw new Error('Not signed in');
-    const updated = await adapter.updateProfile({ isVerified: true });
-    return { status: 'verified' as const, method, user: updated };
-  }
-  const response = await getApiClient().post<VerificationStatus>('/profile/verification', {
-    method,
-  });
-  return { status: response.data.status, method, user: null };
+export async function submitVerification(imageData: string, imageMime = 'image/jpeg') {
+  return getAuthAdapter().submitVerification(imageData, imageMime);
 }

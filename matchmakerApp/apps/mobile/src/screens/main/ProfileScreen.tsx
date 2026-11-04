@@ -62,6 +62,7 @@ export function ProfileScreen() {
 
   const missing = getMissingProfileSections(user);
   const photos = user.photos;
+  const isVerified = verification === null ? user.isVerified : verification === 'verified';
 
   return (
     <ScreenContainer padded={false}>
@@ -107,7 +108,7 @@ export function ProfileScreen() {
               <Text variant="headlineSmall" style={styles.name}>
                 {user.name}
               </Text>
-              {user.isVerified ? (
+              {isVerified ? (
                 <AppIcon name="check-decagram" size={20} color={COLORS.secondary} />
               ) : null}
             </View>

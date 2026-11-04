@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { currentUserId, requireAuth } from '@/auth';
 import { pool, withTransaction } from '@/db';
 import { getUserById } from '@/db/users';
+import { ApiError } from '@/errors';
 import { asyncHandler, parse, send } from '@/http';
 
 export const profileRouter = Router();
@@ -164,49 +165,118 @@ async function upsertPreferences(
 /**
  * Verification status.
  *
- * `getVerificationStatus` calls this on both auth adapters and it did not exist,
- * so opening the verification screen in HTTP mode was a 404. It reports the
- * `users.verification_status` column, which only ever holds `unverified` --
- * FP1's ID/puzzle/biometric flow is not built, and the column is there so that
- * work has something to write to.
+ * Returns the current user's verification status based on their latest submission.
+ * If no submission exists, returns 'unverified'.
  */
 profileRouter.get(
   '/verification',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const user = await getUserById(currentUserId(req));
-    send(res, { status: verificationStatusFor(user) });
+    const userId = currentUserId(req);
+
+    // Get the latest submission for this user
+    const { rows } = await pool.query<{
+      verification_status: VerificationStatus['status'];
+      rejection_reason: string | null;
+      submitted_at: Date | null;
+      reviewed_at: Date | null;
+    }>(
+      `SELECT u.verification_status,
+              vs.rejection_reason,
+              vs.submitted_at,
+              vs.reviewed_at
+         FROM users u
+         LEFT JOIN LATERAL (
+           SELECT rejection_reason, submitted_at, reviewed_at
+             FROM verification_submissions
+            WHERE user_id = u.id
+            ORDER BY submitted_at DESC
+            LIMIT 1
+         ) vs ON true
+        WHERE u.id = $1`,
+      [userId]
+    );
+
+    const submission = rows[0];
+    send(res, {
+      status: submission?.verification_status ?? 'unverified',
+      submittedAt: submission?.submitted_at?.toISOString(),
+      reviewedAt: submission?.reviewed_at?.toISOString(),
+      ...(submission?.rejection_reason ? { rejectionReason: submission.rejection_reason } : {}),
+    });
   })
 );
 
-const verificationSchema = z.object({
-  method: z.enum(['document', 'selfie', 'phone', 'email']),
-});
+const verificationSubmitSchema = z
+  .object({
+    imageData: z
+      .string()
+      .min(32, 'Image data is required')
+      .max(2_200_000, 'Image must be smaller than 1.6 MB')
+      .regex(/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/, 'Upload a valid image'),
+    imageMime: z.enum(['image/jpeg', 'image/png', 'image/webp']).default('image/jpeg'),
+  })
+  .superRefine(({ imageData, imageMime }, context) => {
+    if (!imageData.startsWith(`data:${imageMime};base64,`)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageMime'],
+        message: 'Image type does not match the uploaded data',
+      });
+    }
+  });
 
 /**
- * Record a verification submission.
+ * Submit a verification photo for admin review.
  *
- * The mock marks you verified immediately so the rest of the app can be
- * exercised; this does the same, for the same reason, and says so in the README
- * rather than pretending a check happened. `status` is `verified` and the badge
- * is set, but no document was checked and `method` is only recorded as what
- * somebody said they would do.
+ * Creates a pending submission. Does NOT award the badge immediately.
+ * The badge is only awarded after an admin accepts the submission.
  */
 profileRouter.post(
   '/verification',
   requireAuth,
   asyncHandler(async (req, res) => {
     const userId = currentUserId(req);
-    const body = parse(verificationSchema, req.body);
+    const body = parse(verificationSubmitSchema, req.body);
 
-    await pool.query(
-      `UPDATE users SET is_verified = true, verification_status = 'verified', updated_at = now()
-        WHERE id = $1`,
-      [userId]
+    const submittedAt = await withTransaction(async (client) => {
+      const { rows: users } = await client.query<{
+        verification_status: VerificationStatus['status'];
+        is_verified: boolean;
+      }>('SELECT verification_status, is_verified FROM users WHERE id = $1 FOR UPDATE', [userId]);
+      const user = users[0];
+      if (!user) throw ApiError.notFound('Profile not found');
+      if (user.is_verified || user.verification_status === 'verified') {
+        throw ApiError.conflict('This account is already verified');
+      }
+      if (user.verification_status === 'pending') {
+        throw ApiError.conflict('A verification submission is already pending');
+      }
+
+      const { rows } = await client.query<{ submitted_at: Date }>(
+        `INSERT INTO verification_submissions (user_id, image_data, image_mime, status)
+         VALUES ($1, $2, $3, 'pending')
+         RETURNING submitted_at`,
+        [userId, body.imageData, body.imageMime]
+      );
+
+      await client.query(
+        `UPDATE users
+            SET is_verified = false, verification_status = 'pending', updated_at = now()
+          WHERE id = $1`,
+        [userId]
+      );
+      return rows[0]?.submitted_at ?? new Date();
+    });
+
+    send(
+      res,
+      {
+        status: 'pending',
+        submittedAt: submittedAt.toISOString(),
+      },
+      201
     );
-
-    void body;
-    send(res, { status: 'verified', method: body.method });
   })
 );
 
@@ -229,16 +299,4 @@ async function replacePhotos(client: PoolClient, userId: string, photos: Photo[]
       [userId, photo.url, photo.isPrimary, photo.order]
     );
   }
-}
-
-/**
- * Derive the reported status from the badge.
- *
- * `users.verification_status` is the stored truth and is not yet selectable by
- * anything, so the badge and the column always agree and this is a read of the
- * column with a fallback. Kept as a function so that when a real submission
- * flow starts writing `pending`/`rejected`, there is one place to change.
- */
-function verificationStatusFor(user: { isVerified: boolean }): VerificationStatus['status'] {
-  return user.isVerified ? 'verified' : 'unverified';
 }

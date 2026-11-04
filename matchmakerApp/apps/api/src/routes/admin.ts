@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import type { User } from '@match-makers/shared';
 import { z } from 'zod';
-import { pool } from '@/db';
+import { pool, withTransaction } from '@/db';
 import { toPhoto, toPost, type PhotoRow, type PostRow } from '@/db/rows';
 import { ApiError } from '@/errors';
 import { asyncHandler, parse, send } from '@/http';
 import { requireAdmin } from '@/admin';
-import { requireAuth } from '@/auth';
+import { currentUserId, requireAuth } from '@/auth';
 
 export const adminRouter = Router();
 
@@ -316,5 +316,156 @@ adminRouter.get(
       res,
       rows.map((row) => ({ tag: row.tag, count: Number(row.count) }))
     );
+  })
+);
+
+/* -------------------------------------------------------------------------- */
+/* Verification review                                                        */
+/* -------------------------------------------------------------------------- */
+
+interface AdminVerificationRow {
+  id: string;
+  user_id: string;
+  user_email: string;
+  user_name: string;
+  user_is_verified: boolean;
+  user_verification_status: string;
+  image_data: string;
+  image_mime: string;
+  status: string;
+  submitted_at: Date;
+  reviewed_at: Date | null;
+  reviewed_by: string | null;
+  rejection_reason: string | null;
+}
+
+/**
+ * All pending verification submissions, newest first.
+ */
+adminRouter.get(
+  '/verifications/pending',
+  asyncHandler(async (_req, res) => {
+    const { rows } = await pool.query<AdminVerificationRow>(
+      `SELECT
+         vs.id, vs.user_id, vs.image_data, vs.image_mime, vs.status,
+         vs.submitted_at, vs.reviewed_at, vs.reviewed_by, vs.rejection_reason,
+         u.email AS user_email, u.name AS user_name,
+         u.is_verified AS user_is_verified, u.verification_status AS user_verification_status
+       FROM verification_submissions vs
+       JOIN users u ON u.id = vs.user_id
+       WHERE vs.status = 'pending'
+       ORDER BY vs.submitted_at DESC`
+    );
+
+    send(
+      res,
+      rows.map((row) => ({
+        id: row.id,
+        userId: row.user_id,
+        userEmail: row.user_email,
+        userName: row.user_name,
+        userIsVerified: row.user_is_verified,
+        userVerificationStatus: row.user_verification_status,
+        imageData: row.image_data,
+        imageMime: row.image_mime,
+        status: row.status,
+        submittedAt: row.submitted_at.toISOString(),
+        reviewedAt: row.reviewed_at?.toISOString(),
+        reviewedBy: row.reviewed_by,
+        rejectionReason: row.rejection_reason,
+      }))
+    );
+  })
+);
+
+/**
+ * Accept a pending verification submission.
+ * Sets the user's is_verified = true and verification_status = 'verified'.
+ */
+const adminVerifyAcceptSchema = z.object({
+  submissionId: z.string().uuid('submissionId must be a uuid'),
+});
+
+adminRouter.post(
+  '/verifications/accept',
+  asyncHandler(async (req, res) => {
+    const adminUserId = currentUserId(req);
+    const { submissionId } = parse(adminVerifyAcceptSchema, req.body);
+
+    await withTransaction(async (client) => {
+      // Get the submission
+      const { rows } = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM verification_submissions WHERE id = $1 AND status = 'pending' FOR UPDATE`,
+        [submissionId]
+      );
+
+      const submission = rows[0];
+      if (!submission) throw ApiError.notFound('No pending submission with that id');
+
+      // Update the submission to accepted
+      await client.query(
+        `UPDATE verification_submissions
+            SET status = 'verified', reviewed_at = now(), reviewed_by = $1
+          WHERE id = $2`,
+        [adminUserId, submissionId]
+      );
+
+      // Update the user to verified
+      await client.query(
+        `UPDATE users
+            SET is_verified = true, verification_status = 'verified', updated_at = now()
+          WHERE id = $1`,
+        [submission.user_id]
+      );
+    });
+
+    send(res, { accepted: true });
+  })
+);
+
+/**
+ * Decline a pending verification submission.
+ * Sets the submission status to 'rejected' with a reason.
+ * User can resubmit afterwards.
+ */
+const adminVerifyDeclineSchema = z.object({
+  submissionId: z.string().uuid('submissionId must be a uuid'),
+  reason: z.string().min(1, 'Reason is required').max(500),
+});
+
+adminRouter.post(
+  '/verifications/decline',
+  asyncHandler(async (req, res) => {
+    const adminUserId = currentUserId(req);
+    const { submissionId, reason } = parse(adminVerifyDeclineSchema, req.body);
+
+    await withTransaction(async (client) => {
+      // Get the submission
+      const { rows } = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM verification_submissions WHERE id = $1 AND status = 'pending' FOR UPDATE`,
+        [submissionId]
+      );
+
+      const submission = rows[0];
+      if (!submission) throw ApiError.notFound('No pending submission with that id');
+
+      // Update the submission to rejected
+      await client.query(
+        `UPDATE verification_submissions
+            SET status = 'rejected', reviewed_at = now(), reviewed_by = $1, rejection_reason = $2
+          WHERE id = $3`,
+        [adminUserId, reason, submissionId]
+      );
+
+      // A declined request remains visibly rejected and never grants the badge.
+      await client.query(
+        `UPDATE users
+            SET is_verified = false, verification_status = 'rejected', updated_at = now()
+          WHERE id = $1`,
+        [submission.user_id]
+      );
+    });
+
+    send(res, { declined: true });
   })
 );

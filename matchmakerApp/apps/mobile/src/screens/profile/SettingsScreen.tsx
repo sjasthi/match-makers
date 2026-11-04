@@ -117,6 +117,19 @@ export function SettingsScreen() {
               testID="settings-admin-posts-row"
             />
 
+            <AdminRow
+              enabled
+              onPress={() => navigation.navigate('AdminVerifications')}
+              label="Admin: verification review"
+              hint={
+                isMock
+                  ? 'Local demo queue; mock mode has no admin-role enforcement.'
+                  : 'Review pending verification submissions. Needs an admin account.'
+              }
+              icon="shield-check"
+              testID="settings-admin-verifications-row"
+            />
+
             <Pressable
               onPress={() => void resetMockData()}
               style={styles.dangerRow}
@@ -165,7 +178,7 @@ function AdminRow({
   hint: string;
   /** Only shown when `enabled` is false. */
   disabledHint?: string;
-  icon: 'shield-account' | 'image-multiple-outline';
+  icon: 'shield-account' | 'image-multiple-outline' | 'shield-check';
   testID?: string;
 }) {
   return (

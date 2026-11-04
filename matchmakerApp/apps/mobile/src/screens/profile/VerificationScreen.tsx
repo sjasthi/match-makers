@@ -1,51 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, Platform, Image } from 'react-native';
 import { Text } from 'react-native-paper';
 import type { VerificationStatus } from '@match-makers/shared';
+import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { ScreenContainer, PrimaryButton, ErrorBanner, LoadingState, AppIcon } from '@/components';
 import { useCurrentUser } from '@/hooks';
-import { useAuthStore } from '@/stores/authStore';
 import { fetchVerificationStatus, submitVerification } from '@/services/profile';
 import { AuthError } from '@/services/auth/AuthError';
-import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
-import type { IconName } from '@/components';
-
-type Method = NonNullable<VerificationStatus['method']>;
-
-const METHODS: ReadonlyArray<{
-  value: Method;
-  icon: IconName;
-  title: string;
-  description: string;
-}> = [
-  {
-    value: 'selfie',
-    icon: 'face-recognition',
-    title: 'Quick selfie check',
-    description: 'Match a short video against your profile photo. Takes about a minute.',
-  },
-  {
-    value: 'document',
-    icon: 'card-account-details-outline',
-    title: 'Government ID',
-    description: 'Upload an ID and a photo of you holding it. Reviewed within a day.',
-  },
-  {
-    value: 'phone',
-    icon: 'phone-lock',
-    title: 'Confirm your phone',
-    description: 'We already have your email. Adding a phone number reduces fake accounts.',
-  },
-];
+import { BORDER_RADIUS, COLORS, SPACING } from '@/constants';
 
 export function VerificationScreen() {
   const user = useCurrentUser();
-  const setUser = useAuthStore((store) => store.setUser);
 
   const [status, setStatus] = useState<VerificationStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState<Method | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,23 +35,91 @@ export function VerificationScreen() {
     void load();
   }, [load]);
 
-  const choose = async (method: Method) => {
+  const pickImage = async (source: 'library' | 'camera') => {
     setError(null);
-    setSubmitting(method);
     try {
-      const result = await submitVerification(method);
-      setStatus({ status: result.status, method });
-      if (result.user) setUser(result.user);
+      let permission;
+      if (source === 'library') {
+        permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      } else {
+        permission = await ImagePicker.requestCameraPermissionsAsync();
+      }
+
+      if (!permission.granted) {
+        setError(
+          source === 'library'
+            ? 'Photo library access is needed to select a photo.'
+            : 'Camera access is needed to take a photo.'
+        );
+        return;
+      }
+
+      const result = await (source === 'library'
+        ? ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsMultipleSelection: false,
+            quality: 0.8,
+          })
+        : ImagePicker.launchCameraAsync({
+            quality: 0.8,
+          }));
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        setSelectedImage(asset.uri);
+        setImagePreview(asset.uri);
+      }
+    } catch {
+      setError('Could not pick image. Please try again.');
+    }
+  };
+
+  const submit = async () => {
+    if (!selectedImage) {
+      setError('Please select a photo first.');
+      return;
+    }
+
+    setError(null);
+    setSubmitting(true);
+    try {
+      // The admin needs an image that is readable from another device, so send
+      // compressed bytes rather than the picker's local file:// URI.
+      const prepared = await manipulateAsync(selectedImage, [{ resize: { width: 1200 } }], {
+        compress: 0.78,
+        format: SaveFormat.JPEG,
+        base64: true,
+      });
+      if (!prepared.base64) throw new Error('Could not prepare this photo for upload.');
+      const imageData = `data:image/jpeg;base64,${prepared.base64}`;
+      if (imageData.length > 2_200_000) {
+        throw new Error('That photo is too large. Please choose a smaller image.');
+      }
+
+      const result = await submitVerification(imageData, 'image/jpeg');
+      setStatus({
+        status: result.status,
+        submittedAt: result.submittedAt,
+      });
+      setSelectedImage(null);
+      setImagePreview(null);
     } catch (caught) {
       setError(AuthError.unknown(caught).message);
     } finally {
-      setSubmitting(null);
+      setSubmitting(false);
     }
+  };
+
+  const removeImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
   };
 
   if (loading) return <LoadingState label="Checking verification..." fullHeight />;
 
-  const isVerified = status?.status === 'verified' || user?.isVerified;
+  const isVerified = status ? status.status === 'verified' : Boolean(user?.isVerified);
+  const isPending = status?.status === 'pending';
+  const isRejected = status?.status === 'rejected';
 
   return (
     <ScreenContainer scroll>
@@ -95,57 +136,102 @@ export function VerificationScreen() {
           </View>
         ) : null}
 
-        {status?.status === 'pending' ? (
+        {isPending ? (
           <ErrorBanner
             message="Your submission is being reviewed. This usually takes under a day."
             tone="info"
           />
         ) : null}
 
+        {isRejected ? (
+          <ErrorBanner
+            message={
+              status?.rejectionReason ?? 'Your submission was not approved. You can try again.'
+            }
+            tone="error"
+          />
+        ) : null}
+
         {error ? <ErrorBanner message={error} onDismiss={() => setError(null)} /> : null}
 
-        <View style={styles.intro}>
-          <Text variant="titleMedium" style={styles.title}>
-            Prove you are real
-          </Text>
-          <Text variant="bodyMedium" style={styles.body}>
-            Verified profiles get more matches and are reported far less often. Pick whichever
-            option suits you, and you can change your mind later.
-          </Text>
-        </View>
+        {!isVerified ? (
+          <View style={styles.intro}>
+            <Text variant="titleMedium" style={styles.title}>
+              Submit a photo for verification
+            </Text>
+            <Text variant="bodyMedium" style={styles.body}>
+              Submit any photo for this demo. An admin will review your submission. The badge means
+              your photo was reviewed; it is not proof of identity.
+            </Text>
+          </View>
+        ) : null}
 
-        <View style={styles.methods}>
-          {METHODS.map((method) => (
-            <View key={method.value} style={styles.methodCard}>
-              <AppIcon name={method.icon} size={24} color={COLORS.primary} />
-              <View style={styles.methodBody}>
-                <Text variant="titleSmall" style={styles.methodTitle}>
-                  {method.title}
-                </Text>
-                <Text variant="bodySmall" style={styles.methodDescription}>
-                  {method.description}
-                </Text>
-              </View>
+        {!isVerified && !isPending && (
+          <>
+            <View style={styles.imageSection}>
+              {imagePreview ? (
+                <View style={styles.previewContainer}>
+                  <Image source={{ uri: imagePreview }} style={styles.previewImage} />
+                  <Pressable
+                    onPress={removeImage}
+                    style={styles.removeButton}
+                    accessibilityLabel="Remove photo"
+                  >
+                    <AppIcon name="close" size={18} color={COLORS.text} />
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.placeholder}>
+                  <AppIcon name="image-outline" size={48} color={COLORS.textMuted} />
+                  <Text variant="bodyMedium" style={styles.placeholderText}>
+                    No photo selected
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.buttonRow}>
               <PrimaryButton
                 variant="outlined"
-                onPress={() => void choose(method.value)}
-                loading={submitting === method.value}
-                disabled={Boolean(submitting) || isVerified}
-                compact
+                onPress={() => void pickImage('library')}
+                disabled={submitting}
+                style={styles.pickButton}
+                icon="image-outline"
               >
-                {isVerified ? 'Done' : 'Start'}
+                Choose from Library
               </PrimaryButton>
+
+              {Platform.OS !== 'web' && (
+                <PrimaryButton
+                  variant="outlined"
+                  onPress={() => void pickImage('camera')}
+                  disabled={submitting}
+                  style={styles.pickButton}
+                  icon="camera-outline"
+                >
+                  Take Photo
+                </PrimaryButton>
+              )}
             </View>
-          ))}
-        </View>
+
+            <PrimaryButton
+              onPress={submit}
+              loading={submitting}
+              disabled={submitting || !selectedImage}
+              fullWidth
+              style={styles.submitButton}
+            >
+              {isRejected ? 'Resubmit' : 'Submit for Review'}
+            </PrimaryButton>
+          </>
+        )}
 
         <Pressable onPress={() => void load()} style={styles.refresh} accessibilityRole="button">
           <Text style={styles.refreshText}>Refresh status</Text>
         </Pressable>
 
         <Text variant="bodySmall" style={styles.footnote}>
-          The prototype skips the actual capture flow and marks you verified immediately, so the
-          rest of the app can be exercised. FP1 called for a proof step that stays non-intrusive.
+          This is a manual demo review. Submitted photos are visible to administrators only.
         </Text>
       </View>
     </ScreenContainer>
@@ -168,20 +254,55 @@ const styles = StyleSheet.create({
   intro: { gap: SPACING.xs },
   title: { fontWeight: '700' },
   body: { color: COLORS.textSecondary },
-  methods: { gap: SPACING.md },
-  methodCard: {
-    flexDirection: 'row',
+  imageSection: {
     alignItems: 'center',
     gap: SPACING.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: BORDER_RADIUS.md,
-    padding: SPACING.md,
   },
-  methodBody: { flex: 1, gap: 2 },
-  methodTitle: { fontWeight: '700' },
-  methodDescription: { color: COLORS.textSecondary, fontSize: FONT_SIZES.xs },
+  previewContainer: {
+    position: 'relative',
+    width: 200,
+    height: 200,
+    borderRadius: BORDER_RADIUS.lg,
+    overflow: 'hidden',
+    backgroundColor: COLORS.surface,
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  removeButton: {
+    position: 'absolute',
+    top: SPACING.sm,
+    right: SPACING.sm,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: BORDER_RADIUS.full,
+    padding: SPACING.xs,
+  },
+  placeholder: {
+    width: 200,
+    height: 200,
+    borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 2,
+    borderColor: COLORS.border,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.sm,
+  },
+  placeholderText: { color: COLORS.textMuted },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: SPACING.md,
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+  },
+  pickButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 160,
+  },
+  submitButton: { marginTop: SPACING.md },
   refresh: { alignSelf: 'center', padding: SPACING.sm },
   refreshText: { color: COLORS.primary, fontWeight: '700' },
-  footnote: { color: COLORS.textMuted },
+  footnote: { color: COLORS.textMuted, textAlign: 'center' },
 });

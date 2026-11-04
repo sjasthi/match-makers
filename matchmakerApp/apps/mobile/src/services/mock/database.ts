@@ -1,7 +1,19 @@
-import type { Post, PostReaction, PostReactionAction, SwipeAction, User } from '@match-makers/shared';
+import type {
+  Post,
+  PostReaction,
+  PostReactionAction,
+  SwipeAction,
+  User,
+} from '@match-makers/shared';
 import { persistentStore, readJson, writeJson } from '@/services/storage/keyValueStore';
 import { normaliseState } from './migrate';
-import { DEMO_EMAIL, generateDemoUser, generateMockUsers, generateSeedPosts, seedReactionsFor } from '@/utils/mockData';
+import {
+  DEMO_EMAIL,
+  generateDemoUser,
+  generateMockUsers,
+  generateSeedPosts,
+  seedReactionsFor,
+} from '@/utils/mockData';
 
 /**
  * Storage key for the mock blob.
@@ -56,6 +68,18 @@ export interface AdminPostSummary {
   dislikes: number;
 }
 
+export interface VerificationSubmission {
+  id: string;
+  userId: string;
+  imageData: string;
+  imageMime: string;
+  status: 'unverified' | 'pending' | 'verified' | 'rejected';
+  submittedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+}
+
 interface MockState {
   users: StoredUser[];
   currentUserId: string | null;
@@ -73,6 +97,7 @@ interface MockState {
    */
   posts: Post[];
   postReactions: PostReaction[];
+  verificationSubmissions: VerificationSubmission[];
 }
 
 function createInitialState(): MockState {
@@ -103,6 +128,7 @@ function createInitialState(): MockState {
      * consumed. Its taste is exactly what the person at the screen creates.
      */
     postReactions: seedReactionsFor(candidates, posts),
+    verificationSubmissions: [],
   };
 }
 
@@ -277,7 +303,9 @@ export class MockDatabase {
 
   /** Adds site-owned posts. The ids are assigned here so callers cannot collide. */
   async addPosts(
-    drafts: Array<Pick<Post, 'imageUri' | 'tags'> & Partial<Pick<Post, 'thumbUri' | 'width' | 'height'>>>
+    drafts: Array<
+      Pick<Post, 'imageUri' | 'tags'> & Partial<Pick<Post, 'thumbUri' | 'width' | 'height'>>
+    >
   ): Promise<Post[]> {
     const state = await this.getState();
     const now = new Date().toISOString();
@@ -413,6 +441,113 @@ export class MockDatabase {
       else entry.dislikes += 1;
     }
     return counts;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Verification submissions                                            */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Creates a new pending verification submission for a user.
+   */
+  async createVerificationSubmission(
+    userId: string,
+    imageData: string,
+    imageMime: string
+  ): Promise<VerificationSubmission> {
+    const state = await this.getState();
+    const user = state.users.find((candidate) => candidate.id === userId);
+    if (!user) throw new Error('Verification account not found');
+    if (user.isVerified) throw new Error('This account is already verified');
+    if (
+      state.verificationSubmissions.some(
+        (item) => item.userId === userId && item.status === 'pending'
+      )
+    ) {
+      throw new Error('A verification submission is already pending');
+    }
+    const now = new Date().toISOString();
+    const submission: VerificationSubmission = {
+      id: `verif_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      userId,
+      imageData,
+      imageMime,
+      status: 'pending',
+      submittedAt: now,
+    };
+    state.verificationSubmissions.push(submission);
+    user.isVerified = false;
+    user.updatedAt = now;
+    await this.persist();
+    return submission;
+  }
+
+  /**
+   * Gets the latest verification submission for a user.
+   */
+  async getLatestVerificationSubmission(
+    userId: string
+  ): Promise<VerificationSubmission | undefined> {
+    const state = await this.getState();
+    const submissions = state.verificationSubmissions
+      .filter((s) => s.userId === userId)
+      .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+    return submissions[0];
+  }
+
+  /**
+   * Gets all pending verification submissions (for admin review).
+   */
+  async getPendingVerificationSubmissions(): Promise<VerificationSubmission[]> {
+    const state = await this.getState();
+    return state.verificationSubmissions
+      .filter((s) => s.status === 'pending')
+      .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+  }
+
+  /**
+   * Accepts a pending verification submission.
+   */
+  async acceptVerificationSubmission(submissionId: string, adminUserId: string): Promise<boolean> {
+    const state = await this.getState();
+    const submission = state.verificationSubmissions.find((s) => s.id === submissionId);
+    if (!submission || submission.status !== 'pending') return false;
+
+    submission.status = 'verified';
+    submission.reviewedAt = new Date().toISOString();
+    submission.reviewedBy = adminUserId;
+    const user = state.users.find((candidate) => candidate.id === submission.userId);
+    if (user) {
+      user.isVerified = true;
+      user.updatedAt = submission.reviewedAt;
+    }
+    await this.persist();
+    return true;
+  }
+
+  /**
+   * Declines a pending verification submission.
+   */
+  async declineVerificationSubmission(
+    submissionId: string,
+    adminUserId: string,
+    reason: string
+  ): Promise<boolean> {
+    const state = await this.getState();
+    const submission = state.verificationSubmissions.find((s) => s.id === submissionId);
+    if (!submission || submission.status !== 'pending') return false;
+
+    submission.status = 'rejected';
+    submission.reviewedAt = new Date().toISOString();
+    submission.reviewedBy = adminUserId;
+    submission.rejectionReason = reason;
+    const user = state.users.find((candidate) => candidate.id === submission.userId);
+    if (user) {
+      user.isVerified = false;
+      user.updatedAt = submission.reviewedAt;
+    }
+    await this.persist();
+    return true;
   }
 }
 

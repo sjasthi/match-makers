@@ -321,7 +321,8 @@ export function generateMockUser(index: number, seed = 42): User & { password: s
     photos: buildPhotos(String(index)),
     location: seedLocation(random, seedTier(random)),
     preferences: defaultPreferences(),
-    isVerified: random() > 0.35,
+    // A demo badge is only earned through an admin-approved verification request.
+    isVerified: false,
     createdAt,
     updatedAt: createdAt,
   };

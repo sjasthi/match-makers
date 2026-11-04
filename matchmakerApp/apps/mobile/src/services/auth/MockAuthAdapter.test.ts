@@ -5,11 +5,7 @@ import { fetchMatches, sendMessage, fetchMessages } from '@/services/matches';
 import { getAuthAdapter } from '@/services/auth';
 import { DEMO_EMAIL, DEMO_PASSWORD, ageFromDateOfBirth } from '@/utils/mockData';
 import { distanceKm } from '@/utils/distance';
-import {
-  Gender,
-  type Location,
-  type User,
-} from '@match-makers/shared';
+import { Gender, type Location, type User } from '@match-makers/shared';
 
 /** Where the demo account sits. Everything nearby is measured from here. */
 const AUSTIN: Location = {
@@ -72,17 +68,54 @@ describe('MockAuthAdapter', () => {
     expect(result.tokens?.accessToken).toMatch(/^mock\./);
   });
 
-  it('round-trips a profile edit through updateProfile', async () => {
+  it('round-trips profile edits but does not let users self-award verification', async () => {
     const adapter = await seedAndSignIn();
 
     const updated = await adapter.updateProfile({ bio: 'New bio', isVerified: true });
 
     expect(updated.bio).toBe('New bio');
-    expect(updated.isVerified).toBe(true);
+    expect(updated.isVerified).toBe(false);
     // And it has to survive a fresh read, not just sit in the returned object.
     const reread = await adapter.getCurrentUser();
     expect(reread?.bio).toBe('New bio');
-    expect(reread?.isVerified).toBe(true);
+    expect(reread?.isVerified).toBe(false);
+  });
+
+  it('keeps a submitted photo pending until an admin accepts it', async () => {
+    const adapter = await seedAndSignIn();
+    const image = 'data:image/jpeg;base64,ZmFrZS1waG90bw==';
+
+    const submission = await adapter.submitVerification(image, 'image/jpeg');
+    expect(submission.status).toBe('pending');
+    expect((await adapter.getCurrentUser())?.isVerified).toBe(false);
+    expect((await adapter.getVerificationStatus()).status).toBe('pending');
+
+    const pending = await mockDb.getPendingVerificationSubmissions();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.imageData).toBe(image);
+
+    await mockDb.acceptVerificationSubmission(pending[0]!.id, 'admin_demo');
+    expect((await adapter.getVerificationStatus()).status).toBe('verified');
+    expect((await adapter.getCurrentUser())?.isVerified).toBe(true);
+  });
+
+  it('shows a decline and allows a new submission', async () => {
+    const adapter = await seedAndSignIn();
+    await adapter.submitVerification('data:image/jpeg;base64,ZmFrZS1waG90bw==', 'image/jpeg');
+    const pending = await mockDb.getPendingVerificationSubmissions();
+
+    await mockDb.declineVerificationSubmission(pending[0]!.id, 'admin_demo', 'Please try again.');
+    const rejected = await adapter.getVerificationStatus();
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.rejectionReason).toBe('Please try again.');
+    expect((await adapter.getCurrentUser())?.isVerified).toBe(false);
+
+    const resubmission = await adapter.submitVerification(
+      'data:image/jpeg;base64,bmV3LXBob3Rv',
+      'image/jpeg'
+    );
+    expect(resubmission.status).toBe('pending');
+    expect((await adapter.getVerificationStatus()).status).toBe('pending');
   });
 
   it('refuses a duplicate email', async () => {
@@ -241,7 +274,9 @@ describe('feed requirements (mock)', () => {
     await seedAndSignIn();
     const page = await fetchFeed(1, 10);
     // Feed now filters to 80%+ only, so blockedReason may be "No strong matches yet"
-    expect(page.blockedReason === null || page.blockedReason?.includes('No strong matches')).toBe(true);
+    expect(page.blockedReason === null || page.blockedReason?.includes('No strong matches')).toBe(
+      true
+    );
   });
 
   it('blames already swiped rather than a setting when that is the cause', async () => {
