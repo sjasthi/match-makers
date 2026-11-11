@@ -1,16 +1,16 @@
 /**
- * Rescores every account's ranking.
+ * Rebuilds stored rankings for every account, or one account.
  *
  * The feed reads `match_scores` rather than computing the ranking per request,
- * because computing it costs 569ms over 400,000 rows and the answer only
- * changes when somebody reacts. This is the job that keeps it fresh.
+ * because computing it costs 569ms over 400,000 rows. Reaction writes rescore
+ * the acting viewer automatically; this command is for a full rebuild, recovery
+ * after bulk changes, or an explicit one-account repair.
  *
  *   npm run rescore --workspace=apps/api              # everyone
  *   npm run rescore --workspace=apps/api -- <email>   # one person
  *
- * In a real deployment this would run on a timer rather than by hand. The
- * important property -- that the feed is a cheap read of a stored result -- does
- * not depend on how often it runs, only on how stale it is allowed to get.
+ * A background worker can replace this batch maintenance command if bulk changes
+ * need to be reflected automatically for every other viewer as well.
  */
 import { pool } from '../src/db';
 import { eligibilitySql } from '../src/eligibility';

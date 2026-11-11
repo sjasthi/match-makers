@@ -6,6 +6,8 @@ import {
   onRealtimeStatus,
   realtimeStatus,
   subscribeToMessages,
+  subscribeToUpdates,
+  type MatchCreatedNotification,
   type MessageNotification,
 } from './realtime';
 
@@ -239,6 +241,38 @@ describe('message delivery', () => {
   });
 });
 
+describe('match updates', () => {
+  it('hands a match-created invalidation to an all-updates subscriber', async () => {
+    await signIn();
+    const received: MatchCreatedNotification[] = [];
+
+    subscribeToUpdates((event) => {
+      if (event.type === 'match_created') received.push(event);
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: 'ready', userId: 'u1' });
+    FakeSocket.last.receive({ type: 'match_created', matchId: 'match-1' });
+
+    expect(received).toEqual([{ type: 'match_created', matchId: 'match-1' }]);
+  });
+
+  it('applies the match filter to match-created invalidations', async () => {
+    await signIn();
+    const received: MatchCreatedNotification[] = [];
+
+    subscribeToUpdates((event) => {
+      if (event.type === 'match_created') received.push(event);
+    }, 'match-2');
+    await jest.advanceTimersByTimeAsync(0);
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: 'ready', userId: 'u1' });
+    FakeSocket.last.receive({ type: 'match_created', matchId: 'match-1' });
+
+    expect(received).toHaveLength(0);
+  });
+});
+
 describe('the connection lifecycle', () => {
   it('closes the socket once the last subscriber has gone', async () => {
     await signIn();
@@ -281,6 +315,22 @@ describe('the connection lifecycle', () => {
     // The first retry is a second away.
     await jest.advanceTimersByTimeAsync(1500);
     expect(FakeSocket.instances.length).toBe(2);
+  });
+
+  it('returns to open after the reconnected socket sends ready', async () => {
+    await signIn();
+
+    subscribeToMessages(() => undefined);
+    await jest.advanceTimersByTimeAsync(0);
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: 'ready', userId: 'u1' });
+    FakeSocket.last.drop();
+
+    await jest.advanceTimersByTimeAsync(1500);
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: 'ready', userId: 'u1' });
+
+    expect(realtimeStatus()).toBe('open');
   });
 
   it('backs off rather than retrying in a tight loop', async () => {

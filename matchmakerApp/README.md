@@ -354,7 +354,7 @@ the paths are not negotiable.
 | `GET`    | `/auth/me`                 |                                                             |
 | `PATCH`  | `/profile`                 | Every field optional, as the app sends it                   |
 | `GET`    | `/profile/verification`    |                                                             |
-| `POST`   | `/profile/verification`    | Marks verified, with no actual check                        |
+| `POST`   | `/profile/verification`    | Submits a photo for manual review; does not award the badge |
 | `GET`    | `/feed`                    | The mutual eligibility gate, as one query                   |
 | `POST`   | `/swipes`                  | Creates a match on two reciprocal likes                     |
 | `GET`    | `/matches`                 | Conversations, with unread counts                           |
@@ -373,6 +373,9 @@ the paths are not negotiable.
 | `GET`    | `/admin/users/:id`        | One account in full                                         |
 | `GET`    | `/admin/posts`            | The library with reaction counts                            |
 | `GET`    | `/admin/tags`             | Every tag in use, by frequency                              |
+| `GET`    | `/admin/verifications/pending` | Pending photo submissions; `requireAdmin`             |
+| `POST`   | `/admin/verifications/accept`  | Accepts a pending submission; `requireAdmin`           |
+| `POST`   | `/admin/verifications/decline` | Declines a pending submission; `requireAdmin`          |
 
 These paths are not negotiable: they are the ones `services/*.ts` and the two HTTP
 auth adapters already call. Several were written against a contract and never
@@ -419,18 +422,25 @@ base64 data URI — a 12-megapixel photo became a **nine-megabyte PNG in a text
 column**. They are now JPEG at 1200px, which covers the deck card, and about
 forty-five times smaller.
 
-### Real-time messages
+### Real-time match and message updates
 
-Messaging is plain HTTP: you send over `POST`, the other person sees it when they
-next fetch. On top of that there is now a WebSocket at `/ws`, and a message
-arriving is pushed to whoever is connected.
+The Matches and Messages screens used to learn about another user's activity
+only when they refetched. The API now sends a WebSocket invalidation when a new
+mutual match is created or a message is saved. The connected clients refetch the
+match list or conversation over HTTP; the socket carries no profile or message
+content, so the API remains the source of truth.
 
 The transport is **Postgres `LISTEN`/`NOTIFY`**, not Redis, and the reason is
 that it needs no new infrastructure: the database is already there, already
-running, and already the thing both sides of a conversation agree on. `NOTIFY`
-carries at most 8KB, so the payload is a pointer — "a message arrived in
-conversation X" — and the client fetches the message over HTTP as it does today.
-One source of truth for what a message is.
+running, and already the thing both sides of a conversation agree on. The small
+payload identifies the changed match; the listener looks up its participants in
+the database and sends the invalidation only to them. A repeated like does not
+announce an existing match as new.
+
+The notification is queued in the same transaction as its write. Postgres
+delivers it only after commit, so clients never refetch a row that has not been
+saved and a notification failure cannot turn an already-committed write into an
+HTTP failure.
 
 Redis is where `fp_reviews.md` wants this to end up, and moving the fan-out to a
 Redis channel later is a contained change: the publish side is one function.
@@ -440,10 +450,11 @@ Redis channel later is a contained change: the publish side is one function.
 ws://localhost:3001/ws?token=<accessToken>
 ```
 
-Verified with two concurrent clients against a live server: both received the
-message, **exactly once** each; a third account not in the conversation received
-nothing; and a socket with a bad token was refused with `4401` rather than
-accepted and hung up on.
+The database-backed integration test connects two participants and an unrelated
+account: both participants receive the match and message invalidations, while
+the unrelated account receives neither. It also checks that repeating the
+reciprocal swipe does not announce a second match. A socket with a bad token is
+refused with `4401` rather than accepted and hung up on.
 
 An earlier version delivered every message **twice** — it both notified the
 database and handed the payload straight to the sockets, and the listener
@@ -451,22 +462,23 @@ delivered it again a moment later. Delivering only through the database is also
 what makes this work across more than one API process, which a direct hand-off
 would not.
 
-**The app consumes it.** `services/realtime.ts` owns one socket for the whole
-app, opened when the first screen wants a message and closed when the last one
-stops caring. The access token goes in the query string, because a browser
-cannot set headers on a WebSocket handshake; it is the same short-lived token
-the HTTP API uses, so it expires on the same clock, and a socket the server
-refuses for being expired is renewed and reconnected rather than left dead.
+**The app consumes it.** `services/realtime.ts` owns one socket shared by the
+Matches, Messages and Chat screens, opened when the first screen subscribes and
+closed when the last one stops caring. The access token goes in the query string,
+because a browser cannot set headers on a WebSocket handshake; it is the same
+short-lived token the HTTP API uses, so it expires on the same clock, and a
+socket the server refuses for being expired is renewed and reconnected rather
+than left dead.
 
-**The socket is an optimisation, never the only way a message arrives.** If it
-is not connected, the chat screen polls every five seconds instead, and says so
-— "Reconnecting — messages will still arrive." A dropped connection costs
-latency, not messages, and it is visible rather than silent. Silently showing
-stale messages is worse than showing nothing.
+**The socket is an optimisation, never the only way an update arrives.** When
+the socket becomes ready after a disconnect, open screens refetch to recover
+notifications Postgres did not retain. Focused Matches and Messages lists poll
+every five seconds while the socket is unavailable; Chat also polls and shows
+"Reconnecting — messages will still arrive." A dropped connection costs
+latency, not data.
 
-Verified end to end in a browser: one person signed in with the chat open, a
-second person sending a message over plain HTTP, and the message appearing in
-the first browser **without a reload**.
+This scope covers matches and messages only. Profile edits, photo-library
+changes and verification decisions do not yet send real-time invalidations.
 
 ### Looking at photos, editing them, and taking them away
 
@@ -545,20 +557,22 @@ they happen to share. That last part cannot be skipped: truncating it to the
 shared tags would make every pair score 1.0, which is a number that means
 nothing.
 
-**The ranking** is computed by `npm run rescore` and stored in `match_scores`,
-and the feed reads that instead of computing it per request. This is the
-"background workers or database functions properly rescore candidate pools" the
-spec asks for, and it is also the only way the feed is fast: computing the
-affinity for a whole pool measured at **1.2 seconds over 400,000 rows**, paid on
-every request to answer a question that only changes when somebody reacts. The
-feed read is **under 2ms** over 2,000 candidates and 4,000,000 stored scores.
+**The ranking** is stored in `match_scores`, and the feed reads that instead of
+computing it per request. When somebody's reaction changes, the API updates their
+tag vector and rescores that viewer's deck in the same transaction, so a
+subsequent feed read sees the new percentages. `npm run rescore` remains the
+maintenance command for rebuilding all accounts or repairing stale scores. The
+stored read is **under 2ms** over 2,000 candidates and 4,000,000 stored scores;
+computing affinity for the whole pool per request measured **1.2 seconds over
+400,000 rows**.
 
-The rescore is a batch, and it is the one thing here that is slow: about 1.8
-seconds per viewer on the synthetic dataset, because a cosine has to read every
-candidate's whole vector rather than only the tags they share. That is the
-trade — a batch that runs when somebody reacts, in exchange for a read that
-costs nothing. `npm run perf` measures it, and `db/perf-dataset.sql` builds the
-dataset it measures against.
+The automatic rescore is the slow part of a reaction write: about 1.8 seconds per
+viewer on the synthetic dataset, because a cosine reads each candidate's whole
+vector rather than only shared tags. The photo UI stays optimistic while that
+write settles, then coalesces the taste-summary and deck refresh after a burst of
+taps. Only the person who reacted is rescored immediately; other people's decks
+still wait for a rescore run. `npm run perf` measures this, and
+`db/perf-dataset.sql` builds the dataset it measures against.
 
 **The bands.** A percentage falls into `90+`, `75+`, `50+` or `below-50`, on
 the floors the spec names. The server returns the band with the score; the card
@@ -1441,10 +1455,20 @@ mid-edit.
 
 ## Verification
 
-FP1 called out honesty and proof as a core concern, so a verification flow is
-scaffolded (`screens/profile/VerificationScreen.tsx`): selfie check, document
-upload, or phone confirmation. The prototype marks you verified immediately so
-the rest of the app can be exercised; the capture step is not implemented.
+Users can submit one compressed photo from their profile for admin review.
+Submissions move through `unverified` → `pending` → `verified` or `rejected`;
+rejected users can submit again. The admin review queue is under Settings →
+Developer → Admin: verification review in development builds, and its API routes
+reuse the existing `requireAdmin` guard. A badge appears only after an admin
+accepts a submission; verification does not affect match scores.
+Mock mode is a local UI demo and has no admin-role enforcement. Use JWT mode for
+the actual permission check, and grant the reviewer account with the existing
+admin CLI.
+
+For the demo, the compressed image data URI is stored in the private
+`verification_submissions` table and returned only by the admin queue route.
+This is not production image hosting. Any photo may be submitted, so the demo
+badge means “an admin reviewed a photo,” not proof of a person's real identity.
 
 ## Scripts
 
@@ -1460,7 +1484,7 @@ the rest of the app can be exercised; the capture step is not implemented.
 | `npm run migrate --workspace=apps/api`     | Apply `db/schema.sql`         |
 | `npm run test:api --workspace=apps/mobile` | App services vs the live API   |
 | `npm run admin --workspace=apps/api -- grant <email>` | Give an account admin      |
-| `npm run rescore --workspace=apps/api`            | Recompute and store every ranking |
+| `npm run rescore --workspace=apps/api`            | Rebuild all rankings; add `-- <email>` for one account |
 | `npm run admin:backfill --workspace=apps/api`     | Rebuild the tag vectors from the reactions |
 | `npm run perf --workspace=apps/api`               | Time the rescore and the feed read   |
 | `npm run perf:compare --workspace=apps/api`       | Time the cosine against the measure it replaced |
@@ -1492,14 +1516,16 @@ Deliberately out of scope for a skeleton, and the natural next pieces of work:
 - Localisation (only English strings exist)
 - ~~Moving the score server-side~~ — **done.** The score is computed in SQL
   over a persistent tag vector, with a 30-day half-life on the evidence, and
-  the ranking is stored by `npm run rescore` so the feed reads it in under 2ms
-  rather than recomputing 1.2 seconds of affinity per request. The similarity
-  measure is a cosine in both places now — server and client — so the deck is
-  ordered by one measure and explained by the same one. The *weights* are still
-  the client's constants, transcribed into `apps/api/src/matching.ts`, and the
-  server's decay is not in the client's: the mock's tag weight has no half-life
-  in it, so mock mode and the real app will not show identical numbers for
-  identical evidence. Tuning the weights still means changing both
+  the acting viewer's ranking is refreshed automatically after a photo reaction.
+  `npm run rescore` remains available for a full rebuild; the feed reads stored
+  scores in under 2ms rather than recomputing 1.2 seconds of affinity per
+  request. The similarity measure is a cosine in both places now — server and
+  client — so the deck is ordered by one measure and explained by the same one.
+  The *weights* are still the client's constants, transcribed into
+  `apps/api/src/matching.ts`, and the server's decay is not in the client's: the
+  mock's tag weight has no half-life in it, so mock mode and the real app will not
+  show identical numbers for identical evidence. Tuning the weights still means
+  changing both
 - Re-ranking the feed over time, rather than sorting purely by score
 - Gating on sexual orientation and relationship goal. Both are scoring-only
   signals today, deliberately, and making them hard requirements is a product

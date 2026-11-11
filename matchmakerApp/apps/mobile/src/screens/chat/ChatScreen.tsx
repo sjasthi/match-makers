@@ -15,18 +15,11 @@ import { Avatar, ErrorBanner, LoadingState, AppIcon } from '@/components';
 import { fetchMessages, sendMessage, type ChatMessage } from '@/services/matches';
 import { getAuthAdapter } from '@/services/auth';
 import { useRealtimeMessages } from '@/hooks/useRealtime';
+import { REALTIME_POLL_INTERVAL_MS } from '@/services/realtime';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { ChatStackParamList } from '@/navigation/types';
 
 type ChatRoute = RouteProp<ChatStackParamList, 'Chat'>;
-
-/**
- * How often to refetch when the socket is not connected.
- *
- * Five seconds: long enough not to hammer the API, short enough that a
- * conversation still feels live while the socket is down.
- */
-const POLL_INTERVAL_MS = 5000;
 
 function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -42,16 +35,23 @@ export function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const loadedMatchId = useRef<string | null>(null);
+  const loadSequence = useRef(0);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const request = ++loadSequence.current;
+    if (loadedMatchId.current !== matchId) setLoading(true);
     setError(null);
     try {
-      setMessages(await fetchMessages(matchId));
+      const nextMessages = await fetchMessages(matchId);
+      if (request !== loadSequence.current) return;
+      setMessages(nextMessages);
+      loadedMatchId.current = matchId;
     } catch (caught) {
+      if (request !== loadSequence.current) return;
       setError(caught instanceof Error ? caught.message : 'Could not load messages');
     } finally {
-      setLoading(false);
+      if (request === loadSequence.current) setLoading(false);
     }
   }, [matchId]);
 
@@ -77,6 +77,12 @@ export function ChatScreen() {
 
   const realtimeStatus = useRealtimeMessages(matchId, onMessage);
 
+  // Postgres notifications are not durable. Refetch when a dropped socket
+  // becomes ready again so messages sent while disconnected are not missed.
+  useEffect(() => {
+    if (realtimeStatus === 'open') void load();
+  }, [realtimeStatus, load]);
+
   /*
    * The polling fallback.
    *
@@ -93,7 +99,7 @@ export function ChatScreen() {
 
     const timer = setInterval(() => {
       void load();
-    }, POLL_INTERVAL_MS);
+    }, REALTIME_POLL_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [realtimeStatus, load]);
 

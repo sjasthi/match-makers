@@ -233,17 +233,10 @@ messagesRouter.post(
 
       const row = rows[0];
       if (!row) throw new Error('INSERT ... RETURNING produced no row');
-      return toSummary(row);
+      const summary = toSummary(row);
+      await publishMessage(client, matchId, viewerId, summary.id);
+      return summary;
     });
-
-    /*
-     * Tell the other person, if they are connected.
-     *
-     * After the commit, never before: a client that reacts to the notification
-     * and fetches the message has to find it, and a notification that arrived
-     * first would send them to fetch a message that is not there yet.
-     */
-    await publishMessage(matchId, viewerId, created.id);
 
     send(res, created, 201);
   })

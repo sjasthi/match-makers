@@ -112,7 +112,9 @@ async function main(): Promise<void> {
 
   // The WebSocket endpoint rides on the same HTTP server, at `/ws`, so there is
   // one port and one place to proxy.
-  attachRealtime(server);
+  void attachRealtime(server).catch((error: unknown) => {
+    console.error('[realtime] could not start the database listener:', error);
+  });
 
   /**
    * A failed `listen` is an unhandled 'error' event unless something is

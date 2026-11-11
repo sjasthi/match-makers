@@ -2,11 +2,11 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { Client as PgClient } from 'pg';
 import { verifyAccessToken } from '@/auth';
-import { pool } from '@/db';
+import { pool, type Queryable } from '@/db';
 import { env } from '@/env';
 
 /**
- * Real-time message delivery.
+ * Real-time invalidation events for matches and messages.
  *
  * Postgres `LISTEN`/`NOTIFY` rather than Redis, and the reason is that it needs
  * no new infrastructure: the database is already there, already running, and
@@ -14,19 +14,19 @@ import { env } from '@/env';
  * `fp_reviews.md` wants this to end up, and moving the fan-out to a Redis
  * channel later is a contained change -- the publish side is one function.
  *
- * `NOTIFY` carries at most 8KB, which is plenty for "a message arrived in
- * conversation X" and is why the payload here is a pointer rather than the
- * message itself. The client fetches the message over HTTP as it does today, so
- * there is one source of truth for what a message is.
+ * `NOTIFY` carries at most 8KB, which is plenty for a pointer to a changed
+ * match or conversation. The client fetches the authoritative data over HTTP,
+ * so there is one source of truth for both.
  *
  * The trade with `NOTIFY` is that it is not durable: a notification is delivered
  * to whoever is listening at that moment and is gone. That is the right shape
- * for "tell the other person something happened" as long as the message itself is
- * in the database, which it is.
+ * for "tell the other person something happened" as long as the changed data is
+ * in the database, which it is. Clients refetch on reconnect to recover events
+ * missed while they were offline.
  */
 
 /** The channel both sides listen on. */
-const CHANNEL = 'new_message';
+const CHANNEL = 'match_updates';
 
 /** A signed-in connection. */
 interface Connection {
@@ -50,18 +50,28 @@ const connections = new Map<string, Set<Connection>>();
  */
 let listener: PgClient | null = null;
 
-interface Notification {
+export interface MessageNotification {
+  type: 'message';
   matchId: string;
   senderId: string;
   /** So a client can tell a new message from a repeat of one it already has. */
   messageId: string;
 }
 
+export interface MatchCreatedNotification {
+  type: 'match_created';
+  matchId: string;
+}
+
+type Notification = MessageNotification | MatchCreatedNotification;
+
 /**
- * Sends a message to the people in a conversation.
+ * Queues a message notification in the same transaction as the message.
  *
- * Called after the message is committed, so a client that reacts to the
- * notification and fetches the message always finds it.
+ * Postgres delivers the notification only when this transaction commits, so a
+ * client that reacts and fetches the message always finds it. Keeping the
+ * notification in the write transaction also avoids returning an error after a
+ * message has already committed just because a separate notify query failed.
  *
  * The notification is the only delivery path. An earlier version also delivered
  * straight to the sockets, in the hope of saving a few milliseconds -- and
@@ -75,26 +85,33 @@ interface Notification {
  * assert.
  */
 export async function publishMessage(
+  client: Queryable,
   matchId: string,
   senderId: string,
   messageId: string
 ): Promise<void> {
-  const payload: Notification = { matchId, senderId, messageId };
-  await pool.query('SELECT pg_notify($1, $2)', [CHANNEL, JSON.stringify(payload)]);
+  const payload: MessageNotification = { type: 'message', matchId, senderId, messageId };
+  await client.query('SELECT pg_notify($1, $2)', [CHANNEL, JSON.stringify(payload)]);
 }
 
 /**
- * Sends a payload to everybody in a conversation.
+ * Queues a new-match notification in the same transaction that creates it.
+ *
+ * Only the match id is carried. The listener looks up its participants from the
+ * database, and the clients refetch the match list over the authenticated API.
+ */
+export async function publishMatchCreated(client: Queryable, matchId: string): Promise<void> {
+  const payload: MatchCreatedNotification = { type: 'match_created', matchId };
+  await client.query('SELECT pg_notify($1, $2)', [CHANNEL, JSON.stringify(payload)]);
+}
+
+/**
+ * Sends a payload to both participants in a match or conversation.
  *
  * The sender is included, so their own other tabs update too.
  */
-function deliver(
-  matchId: string,
-  senderId: string,
-  participantIds: string[],
-  messageId: string
-): void {
-  const body = JSON.stringify({ type: 'message', matchId, senderId, messageId });
+function deliver(notification: Notification, participantIds: string[]): void {
+  const body = JSON.stringify(notification);
   for (const userId of participantIds) {
     for (const client of connections.get(userId) ?? []) {
       if (client.socket.readyState === client.socket.OPEN) {
@@ -112,7 +129,7 @@ function deliver(
  * expires on the same clock, and it is verified before the connection is
  * accepted rather than after.
  */
-export function attachRealtime(server: Server): void {
+export async function attachRealtime(server: Server): Promise<void> {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', (socket, request) => {
@@ -142,7 +159,7 @@ export function attachRealtime(server: Server): void {
     socket.send(JSON.stringify({ type: 'ready', userId: payload.sub }));
   });
 
-  void startListener();
+  await startListener();
 }
 
 /**
@@ -157,14 +174,12 @@ async function startListener(): Promise<void> {
   client.on('notification', (message) => {
     if (message.channel !== CHANNEL || !message.payload) return;
 
-    let payload: Notification;
-    try {
-      payload = JSON.parse(message.payload) as Notification;
-    } catch {
-      return;
-    }
+    const payload = parseNotification(message.payload);
+    if (!payload) return;
 
-    void forwardToParticipants(payload);
+    void forwardToParticipants(payload).catch((error: unknown) => {
+      console.error('[realtime] could not forward update:', error);
+    });
   });
 
   client.on('error', (error) => {
@@ -179,11 +194,37 @@ async function startListener(): Promise<void> {
   await client.query(`LISTEN ${CHANNEL}`);
   listener = client;
 
-  console.log('[realtime] listening for new messages');
+  console.log('[realtime] listening for match and message updates');
+}
+
+/** Parses notifications from Postgres, ignoring malformed or unknown payloads. */
+function parseNotification(raw: string): Notification | null {
+  try {
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    if (
+      payload.type === 'message' &&
+      typeof payload.matchId === 'string' &&
+      typeof payload.senderId === 'string' &&
+      typeof payload.messageId === 'string'
+    ) {
+      return {
+        type: 'message',
+        matchId: payload.matchId,
+        senderId: payload.senderId,
+        messageId: payload.messageId,
+      };
+    }
+    if (payload.type === 'match_created' && typeof payload.matchId === 'string') {
+      return { type: 'match_created', matchId: payload.matchId };
+    }
+  } catch {
+    // Ignore malformed database notifications.
+  }
+  return null;
 }
 
 /**
- * Looks up who is in a conversation and pushes the notification to them.
+ * Looks up who is in a match and pushes the notification to its participants.
  *
  * The participants are read from the database rather than carried in the
  * notification, so the notification cannot be used to tell a client about a
@@ -198,7 +239,7 @@ async function forwardToParticipants(payload: Notification): Promise<void> {
   const match = rows[0];
   if (!match) return;
 
-  deliver(payload.matchId, payload.senderId, [match.user_a_id, match.user_b_id], payload.messageId);
+  deliver(payload, [match.user_a_id, match.user_b_id]);
 }
 
 /** Closes the listener. Used when the server shuts down. */

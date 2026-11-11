@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Text, TextInput } from 'react-native-paper';
 import { ScreenContainer, Avatar, EmptyState, LoadingState, ErrorBanner } from '@/components';
 import { useMatches } from '@/hooks';
+import { getAuthAdapter } from '@/services/auth';
 import { markConversationRead } from '@/services/matches';
 import { useDebouncedValue } from '@/hooks/useAsync';
-import { useRealtimeMessages } from '@/hooks/useRealtime';
+import { REALTIME_POLL_INTERVAL_MS } from '@/services/realtime';
+import { useRealtimeUpdates } from '@/hooks/useRealtime';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { RootStackParamList } from '@/navigation/types';
 
@@ -28,30 +30,32 @@ export function MessagesScreen() {
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebouncedValue(query);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void load({ refresh: true });
-    }, [load])
-  );
-
-  /*
-   * A message arriving anywhere refreshes the list.
-   *
-   * The conversation list shows the other person's name, the last line of the
-   * conversation and an unread badge, so a message that has landed changes all
-   * three. Watching every conversation rather than one is the point: this
-   * screen does not know which conversation a message belongs to until the
-   * server says so.
-   */
-  const onMessage = useCallback(() => {
+  const onUpdate = useCallback(() => {
     void load({ refresh: true });
   }, [load]);
 
-  useRealtimeMessages(undefined, onMessage);
+  const realtimeStatus = useRealtimeUpdates(onUpdate);
+  const realtimeStatusRef = useRef(realtimeStatus);
+  realtimeStatusRef.current = realtimeStatus;
+
+  // Postgres notifications are not durable. Catch up whenever the socket
+  // becomes ready after a drop, before relying on push delivery again.
+  useEffect(() => {
+    if (realtimeStatus === 'open') void load({ refresh: true });
+  }, [realtimeStatus, load]);
+
+  // Keep the active list fresh when WebSocket delivery is unavailable.
+  useFocusEffect(
+    useCallback(() => {
+      void load({ refresh: true });
+      if (getAuthAdapter().mode === 'mock') return undefined;
+
+      const timer = setInterval(() => {
+        if (realtimeStatusRef.current !== 'open') void load({ refresh: true });
+      }, REALTIME_POLL_INTERVAL_MS);
+      return () => clearInterval(timer);
+    }, [load])
+  );
 
   const openChat = useCallback(
     async (matchId: string, name: string, avatarUri: string | null) => {

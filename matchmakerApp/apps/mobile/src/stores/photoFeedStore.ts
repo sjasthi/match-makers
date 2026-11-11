@@ -4,18 +4,19 @@ import type { PhotoFeedPage, TasteSummary } from '@match-makers/shared';
 
 import { AuthError } from '@/services/auth/AuthError';
 import { fetchPhotoFeed, fetchTasteSummary, reactToPost, undoPostReaction } from '@/services/posts';
+import { useFeedStore } from '@/stores/feedStore';
 import { adjustOpinionsForReaction } from '@/utils/taste';
 import type { LoadState } from '@/types';
 
 const EMPTY_SUMMARY: TasteSummary = { likes: 0, dislikes: 0, tags: [], closest: [] };
 
 /**
- * How long to wait after the last reaction before re-reading the summary.
+ * How long to wait after the last reaction before refreshing the summary and
+ * match deck.
  *
- * The viewer answers photo after photo, so doing a full recompute per tap meant
- * one rebuild of the taste index over the whole reactions table and one re-score
- * of every candidate, twenty times in a row. Coalescing makes a burst cost one
- * recompute.
+ * The API rescales this viewer inside each changed-reaction transaction. The
+ * client waits for a burst to settle so it only refetches the summary and deck
+ * once, rather than once per tap.
  *
  * Not a `useEffect` timer: it is held at module scope so a refresh survives the
  * viewer unmounting mid-wait, which is exactly what happens when the last photo
@@ -262,10 +263,11 @@ async function runLoad(set: FeedSetter, state: LoadState): Promise<void> {
 }
 
 /**
- * Re-reads the authoritative summary once the taps stop.
+ * Re-reads the authoritative summary and deck once the taps stop.
  *
- * Every pending call collapses into one. The bumps already applied on the way in
- * are simply replaced by the server's answer, so there is nothing to reconcile.
+ * Every pending call collapses into one. The summary replaces the optimistic
+ * counts, and the deck fetch picks up the scores the API recomputed for this
+ * viewer's reactions.
  */
 function scheduleSummaryRefresh(set: FeedSetter): void {
   cancelPendingSummaryRefresh();
@@ -281,5 +283,6 @@ function scheduleSummaryRefresh(set: FeedSetter): void {
         // The reaction landed. A stale "who it moved" list is a much smaller
         // problem than making it look like the taps failed.
       });
+    void useFeedStore.getState().load({ refresh: true });
   }, SUMMARY_SETTLE_MS);
 }

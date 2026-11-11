@@ -3,12 +3,12 @@ import { getAuthTransport } from '@/services/api/client';
 import { getSecretStore } from '@/services/storage/keyValueStore';
 
 /**
- * Real-time message delivery, client side.
+ * Real-time match and message invalidations, client side.
  *
  * The server pushes a notification over a WebSocket when a message lands in a
- * conversation, and the client fetches the message over HTTP as it always did.
- * The notification is a pointer, not the message: one source of truth for what a
- * message is, and the socket carries no payload that could disagree with it.
+ * conversation or a match is created, and the client fetches the affected data
+ * over HTTP. Notifications are pointers, not domain data, so HTTP remains the
+ * source of truth.
  *
  * The socket is a *latency* optimisation, never the only way to see a message.
  * Everything here has a fallback -- polling, and the normal refetch on screen
@@ -26,13 +26,20 @@ export interface MessageNotification {
   messageId: string;
 }
 
+/** A new match was created. The client refetches its match list over HTTP. */
+export interface MatchCreatedNotification {
+  type: 'match_created';
+  matchId: string;
+}
+
 /** The server's hello, sent as soon as the socket is accepted. */
 export interface ReadyEvent {
   type: 'ready';
   userId: string;
 }
 
-export type RealtimeEvent = MessageNotification | ReadyEvent;
+export type RealtimeNotification = MessageNotification | MatchCreatedNotification;
+export type RealtimeEvent = RealtimeNotification | ReadyEvent;
 
 /**
  * How the connection is doing.
@@ -44,7 +51,7 @@ export type RealtimeEvent = MessageNotification | ReadyEvent;
  */
 export type RealtimeStatus = 'idle' | 'connecting' | 'open' | 'closed';
 
-type Subscriber = (event: MessageNotification) => void;
+type Subscriber = (event: RealtimeNotification) => void;
 
 interface Subscription {
   /** The conversation being watched, or undefined for all of them. */
@@ -115,11 +122,14 @@ export function onRealtimeStatus(listener: (status: RealtimeStatus) => void): ()
   return () => statusListeners.delete(listener);
 }
 
+/** The fallback cadence used by focused data screens when live updates are down. */
+export const REALTIME_POLL_INTERVAL_MS = 5000;
+
 /**
- * Watches for messages.
+ * Watches for match and message updates.
  *
- * `matchId` narrows the watch to one conversation; leave it out to watch all of
- * them, which is what the conversation list wants.
+ * `matchId` narrows the watch to one conversation or match; leave it out to
+ * watch all of the signed-in user's updates, as the match and message lists do.
  *
  * Returns an unsubscribe function. The socket is shared, so the last
  * unsubscribe is what closes it.
@@ -130,7 +140,7 @@ export function onRealtimeStatus(listener: (status: RealtimeStatus) => void): ()
  * is also what stops this module having to know about the auth layer, which it
  * would otherwise pull into a cycle with the adapter that disconnects it.
  */
-export function subscribeToMessages(handler: Subscriber, matchId?: string): () => void {
+export function subscribeToUpdates(handler: Subscriber, matchId?: string): () => void {
   const subscription: Subscription = { matchId, handler };
   subscribers = [...subscribers, subscription];
 
@@ -142,6 +152,16 @@ export function subscribeToMessages(handler: Subscriber, matchId?: string): () =
   };
 }
 
+/** Watches for messages, optionally narrowed to one conversation. */
+export function subscribeToMessages(
+  handler: (event: MessageNotification) => void,
+  matchId?: string
+): () => void {
+  return subscribeToUpdates((event) => {
+    if (event.type === 'message') handler(event);
+  }, matchId);
+}
+
 /**
  * Hands a notification to whoever is watching for it.
  *
@@ -150,7 +170,7 @@ export function subscribeToMessages(handler: Subscriber, matchId?: string): () =
  * conversation list's need: it does not know which conversation a message
  * belongs to until the server says so.
  */
-function dispatch(event: MessageNotification): void {
+function dispatch(event: RealtimeNotification): void {
   for (const subscriber of subscribers) {
     if (subscriber.matchId !== undefined && subscriber.matchId !== event.matchId) continue;
     try {
@@ -236,17 +256,25 @@ async function ensureConnected(): Promise<void> {
 function parseEvent(raw: unknown): RealtimeEvent | null {
   if (typeof raw !== 'string') return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<RealtimeEvent>;
-    if (parsed.type === 'ready' && typeof parsed.userId === 'string') {
-      return { type: 'ready', userId: parsed.userId };
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (value.type === 'ready' && typeof value.userId === 'string') {
+      return { type: 'ready', userId: value.userId };
     }
     if (
-      parsed.type === 'message' &&
-      typeof parsed.matchId === 'string' &&
-      typeof parsed.messageId === 'string' &&
-      typeof parsed.senderId === 'string'
+      value.type === 'message' &&
+      typeof value.matchId === 'string' &&
+      typeof value.messageId === 'string' &&
+      typeof value.senderId === 'string'
     ) {
-      return parsed as MessageNotification;
+      return {
+        type: 'message',
+        matchId: value.matchId,
+        messageId: value.messageId,
+        senderId: value.senderId,
+      };
+    }
+    if (value.type === 'match_created' && typeof value.matchId === 'string') {
+      return { type: 'match_created', matchId: value.matchId };
     }
     return null;
   } catch {
@@ -317,8 +345,8 @@ export function disconnectRealtime(): void {
 /**
  * Whether the socket is currently live.
  *
- * The polling fallback asks this: if the socket is open there is no reason to
- * poll, and if it is not then polling is the only way messages will arrive.
+ * Focused list screens and Chat use this to avoid API polling while push
+ * delivery is healthy. When it is not, they fall back to regular API reads.
  */
 export function isRealtimeConnected(): boolean {
   return status === 'open';

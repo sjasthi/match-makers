@@ -11,10 +11,12 @@ import { z } from 'zod';
 import { requireAdmin } from '@/admin';
 import { applyReactionToAffinity } from '@/affinity';
 import { currentUserId, optionalAuth, requireAuth } from '@/auth';
+import { eligibilitySql } from '@/eligibility';
 import { pool, withTransaction, type Queryable } from '@/db';
 import { toPost, type PostRow } from '@/db/rows';
 import { ApiError } from '@/errors';
 import { asyncHandler, parse, send } from '@/http';
+import { rescoreForViewer } from '@/matching';
 
 export const postsRouter = Router();
 
@@ -133,6 +135,10 @@ postsRouter.post(
     const body = parse(postReactionRequestSchema, req.body);
 
     const reaction = await withTransaction(async (client) => {
+      // Serialize this user's reaction writes and rescoring. Rapid taps should
+      // not let an older ranking transaction overwrite the newest one.
+      await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [viewerId]);
+
       const exists = await client.query<{ tags: string[] }>(
         'SELECT tags FROM posts WHERE id = $1',
         [body.postId]
@@ -142,11 +148,27 @@ postsRouter.post(
 
       // What the caller previously answered, so a like turned into a dislike
       // moves the tag vector in both directions rather than only one.
-      const previous = await client.query<{ action: 'like' | 'dislike' }>(
-        'SELECT action FROM post_reactions WHERE user_id = $1 AND post_id = $2',
+      const previous = await client.query<{
+        id: string;
+        action: 'like' | 'dislike';
+        created_at: Date;
+      }>(
+        'SELECT id, action, created_at FROM post_reactions WHERE user_id = $1 AND post_id = $2',
         [viewerId, body.postId]
       );
-      const oldAction = previous.rows[0]?.action;
+      const oldReaction = previous.rows[0];
+
+      // A retried request for the same answer is idempotent: do not double-count
+      // it in the affinity vector or refresh its evidence timestamp.
+      if (oldReaction?.action === body.action) {
+        return {
+          id: oldReaction.id,
+          userId: viewerId,
+          postId: body.postId,
+          action: body.action,
+          createdAt: oldReaction.created_at.toISOString(),
+        };
+      }
 
       const { rows } = await client.query<{ id: string; created_at: Date }>(
         `INSERT INTO post_reactions (user_id, post_id, action)
@@ -164,10 +186,14 @@ postsRouter.post(
        * new one. Without this, changing your mind about a photo would leave the
        * vector counting both opinions at once.
        */
-      if (oldAction && oldAction !== body.action) {
-        await applyReactionToAffinity(client, viewerId, tags, oldAction, { undo: true });
+      if (oldReaction) {
+        await applyReactionToAffinity(client, viewerId, tags, oldReaction.action, { undo: true });
       }
       await applyReactionToAffinity(client, viewerId, tags, body.action);
+
+      // The feed reads cached scores. Rebuild this viewer's rows in the same
+      // transaction as the reaction so the next GET /feed sees the new ranking.
+      await rescoreForViewer(client, viewerId, eligibilitySql());
 
       const row = rows[0];
       return {
@@ -203,6 +229,8 @@ postsRouter.delete(
     const { postId } = parse(postIdSchema, req.params);
 
     const result = await withTransaction(async (client) => {
+      await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [viewerId]);
+
       // The reaction being taken back, and the tags it was voting for, so the
       // tag vector can move with it. Deleting without this would leave the
       // vector claiming an opinion the reactions table no longer supports.
@@ -222,6 +250,7 @@ postsRouter.delete(
 
       if (row && (deleted.rowCount ?? 0) > 0) {
         await applyReactionToAffinity(client, viewerId, row.tags, row.action, { undo: true });
+        await rescoreForViewer(client, viewerId, eligibilitySql());
       }
 
       return (deleted.rowCount ?? 0) > 0;

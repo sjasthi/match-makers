@@ -1,11 +1,14 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Text } from 'react-native-paper';
 import { ScreenContainer, Avatar, EmptyState, LoadingState, ErrorBanner } from '@/components';
 import { useMatches } from '@/hooks';
+import { getAuthAdapter } from '@/services/auth';
 import type { MatchSummary } from '@/services/matches';
+import { REALTIME_POLL_INTERVAL_MS } from '@/services/realtime';
+import { useRealtimeUpdates } from '@/hooks/useRealtime';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { RootStackParamList } from '@/navigation/types';
 
@@ -13,14 +16,29 @@ export function MatchesScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { matches, state, error, load } = useMatches();
 
-  useEffect(() => {
-    void load();
+  const onUpdate = useCallback(() => {
+    void load({ refresh: true });
   }, [load]);
+  const realtimeStatus = useRealtimeUpdates(onUpdate);
+  const realtimeStatusRef = useRef(realtimeStatus);
+  realtimeStatusRef.current = realtimeStatus;
 
-  // A new match from the feed should show up here without a manual refresh.
+  // A reconnect means the socket may have missed a non-durable Postgres event.
+  useEffect(() => {
+    if (realtimeStatus === 'open') void load({ refresh: true });
+  }, [realtimeStatus, load]);
+
+  // Refresh on focus and poll only while this screen is visible and the socket
+  // is unavailable. The socket is an optimization, not the only delivery path.
   useFocusEffect(
     useCallback(() => {
       void load({ refresh: true });
+      if (getAuthAdapter().mode === 'mock') return undefined;
+
+      const timer = setInterval(() => {
+        if (realtimeStatusRef.current !== 'open') void load({ refresh: true });
+      }, REALTIME_POLL_INTERVAL_MS);
+      return () => clearInterval(timer);
     }, [load])
   );
 

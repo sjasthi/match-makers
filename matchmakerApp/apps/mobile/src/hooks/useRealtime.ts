@@ -3,18 +3,18 @@ import { useEffect, useRef, useState } from 'react';
 import {
   onRealtimeStatus,
   realtimeStatus,
-  subscribeToMessages,
+  subscribeToUpdates,
   type MessageNotification,
+  type RealtimeNotification,
   type RealtimeStatus,
 } from '@/services/realtime';
 import { useAuthStore } from '@/stores/authStore';
 
 /**
- * Watches for messages arriving over the socket.
+ * Watches for match and message invalidations arriving over the socket.
  *
- * `matchId` narrows the watch to one conversation. Leave it undefined to watch
- * all of them, which is what the conversation list wants -- it does not know
- * which conversation a message belongs to until the server says so.
+ * `matchId` narrows the watch to one conversation or match. Leave it undefined
+ * to watch all updates relevant to the signed-in user.
  *
  * The handler is held in a ref so that a caller can pass an inline function
  * without resubscribing on every render. Resubscribing is not free: it closes
@@ -26,16 +26,16 @@ import { useAuthStore } from '@/stores/authStore';
  * which is worse than not having one, because the fallback that would cover for
  * it would be switched off.
  *
- * Returns the connection status, so a screen can show that delivery is
- * degraded rather than silently showing stale messages.
+ * Returns the connection status, so a screen can fall back to API polling
+ * rather than silently showing stale data.
  */
-export function useRealtimeMessages(
-  matchId: string | undefined,
-  onMessage: (notification: MessageNotification) => void
+export function useRealtimeUpdates(
+  onUpdate: (notification: RealtimeNotification) => void,
+  matchId?: string
 ): RealtimeStatus {
   const [status, setStatus] = useState<RealtimeStatus>(realtimeStatus);
-  const handler = useRef(onMessage);
-  handler.current = onMessage;
+  const handler = useRef(onUpdate);
+  handler.current = onUpdate;
 
   const authMode = useAuthStore((store) => store.authMode);
 
@@ -48,8 +48,18 @@ export function useRealtimeMessages(
 
   useEffect(() => {
     if (authMode !== 'jwt') return undefined;
-    return subscribeToMessages((notification) => handler.current(notification), matchId);
+    return subscribeToUpdates((notification) => handler.current(notification), matchId);
   }, [authMode, matchId]);
 
   return status;
+}
+
+/** Watches only for message notifications, optionally narrowed to one chat. */
+export function useRealtimeMessages(
+  matchId: string | undefined,
+  onMessage: (notification: MessageNotification) => void
+): RealtimeStatus {
+  return useRealtimeUpdates((notification) => {
+    if (notification.type === 'message') onMessage(notification);
+  }, matchId);
 }

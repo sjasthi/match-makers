@@ -484,12 +484,61 @@ Brief:
   admin-reviewed rather than a guarantee that the account represents a real person.
 
 [FP9]
-### Real-time updates.
-Address the issue where updates do not appear automatically and require a manual refresh.
+### Real-time match and message updates.
+This iteration fixes stale match and conversation screens. It does not try to
+broadcast every database change; profile, photo-library and verification updates
+remain out of scope.
 
 Process:
-- Trace the update from the client through the API to the database to find where it stops being reflected.
-- After a change is saved successfully, send an update notification through the existing WebSocket connection.
-- Have connected clients refresh the affected data from the API and update the screen automatically.
-- If the WebSocket is unavailable, fall back to a regular API refresh.
-- Test updates across multiple clients, including when a client disconnects and reconnects.
+- A newly created mutual match notifies both participants, so their Matches and
+  Messages lists refetch without a manual refresh. Repeated likes do not announce
+  the existing match as new.
+- A saved message notifies the conversation participants. Notifications are
+  invalidation pointers; clients refetch the message or list from the API.
+- Queue Postgres `NOTIFY` in the same transaction as the match or message write.
+  The listener resolves recipients from the stored match, not from client-chosen
+  recipients.
+- Since `NOTIFY` is not durable, connected clients refetch when the WebSocket
+  becomes ready after reconnecting. Focused Matches and Messages lists poll the
+  API every five seconds while the socket is unavailable; Chat keeps its existing
+  polling fallback.
+- Test two connected participants and an unrelated account, duplicate match
+  creation, event-driven refetch, and reconnect recovery.
+
+[FP10] 11/11/2026
+### Bundle account setup, matching, verification and messaging into one demonstration.
+FP10 is the end-to-end capstone walkthrough, not a new matching rule. The demo
+starts with newly created accounts and follows them through profile setup, a mutual
+match, verification review and a conversation. It uses the profile photos and shared
+photo library already in the app.
+
+Demonstration flow
+------------------
+1. **Create accounts and profiles.** Register two user accounts, complete their
+   profiles and discovery preferences, and add profile photos. Those photos identify
+   people in the candidate, match and conversation screens.
+2. **Show how matching works.** Each account reacts to photos in the shared,
+   site-owned photo feed. The matcher uses those reactions to rank eligible profiles
+   and explain shared taste. Profile photos are for recognizing a person; they are not
+   the taste evidence. Like each other from the two accounts to create a mutual match.
+3. **Show verification.** Submit a photo from one profile and show its `pending`
+   status. Sign in separately as an administrator to accept or decline it, then show
+   the resulting status and badge to the applicant. The review photo stays separate
+   from public profile photos. Explain that this is an admin-reviewed photo, not proof
+   of identity, and does not affect the match score.
+4. **Show messaging.** Open the new match from both user accounts, send a message,
+   and show it arrive in the other conversation. Match and message updates refresh the
+   relevant screens; if the real-time connection is unavailable, the app refetches
+   when it reconnects and uses polling as a fallback.
+
+Success criteria
+----------------
+- The complete walkthrough works with two regular accounts and a separately
+  authenticated admin reviewer, without editing database records by hand.
+- Profile photos appear on people cards, while shared-feed reactions provide the
+  matching evidence and an understandable reason for the ranking.
+- A mutual like creates one match and makes the conversation available to both people.
+- The verification submission, admin decision and user-visible result are clear, with
+  the demo's identity-proof limitation stated honestly.
+- A message is saved and visible to both participants, including after a reconnect or
+  polling fallback.

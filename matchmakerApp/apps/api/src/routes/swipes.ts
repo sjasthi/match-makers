@@ -6,6 +6,7 @@ import { withTransaction, type Queryable } from '@/db';
 import { toPhoto, type PhotoRow } from '@/db/rows';
 import { ApiError } from '@/errors';
 import { asyncHandler, parse, send } from '@/http';
+import { publishMatchCreated } from '@/realtime';
 
 export const swipesRouter = Router();
 
@@ -70,11 +71,12 @@ swipesRouter.post(
 
       if (!reciprocal) return { swipeId, isMatch: false, match: null };
 
-      return {
-        swipeId,
-        isMatch: true,
-        match: await createMatch(client, actorId, body.targetUserId),
-      };
+      const created = await createMatch(client, actorId, body.targetUserId);
+      if (!created) return { swipeId, isMatch: false, match: null };
+
+      if (created.isNew) await publishMatchCreated(client, created.match.id);
+
+      return { swipeId, isMatch: true, match: created.match };
     });
 
     const response: SwipeResponse = {
@@ -102,26 +104,37 @@ swipesRouter.post(
  * the server infer, and inference fails here because the *result* type of
  * `least` is not the type of its arguments when the arguments are unknown.
  *
- * `DO UPDATE SET created_at = matches.created_at` is a no-op assignment chosen
- * so a second swipe cannot quietly re-date the match. It reads as noise but it
- * is what makes this idempotent: `DO NOTHING` would skip the RETURNING row and
- * lose the id of a match that already existed.
+ * A conflict means the pair already matched. In that case the existing row is
+ * loaded in a second statement, while `isNew` remains false so retries do not
+ * emit another match-created event.
  */
 export async function createMatch(
   client: Queryable,
   a: string,
   b: string
-): Promise<MatchPair | null> {
+): Promise<{ match: MatchPair; isNew: boolean } | null> {
   const inserted = await client.query<{ id: string; created_at: Date }>(
     `INSERT INTO matches (user_a_id, user_b_id)
           VALUES (least($1::uuid, $2::uuid), greatest($1::uuid, $2::uuid))
-     ON CONFLICT (user_a_id, user_b_id)
-     DO UPDATE SET created_at = matches.created_at
-     RETURNING id, created_at`,
+     ON CONFLICT (user_a_id, user_b_id) DO NOTHING
+      RETURNING id, created_at`,
     [a, b]
   );
 
-  const row = inserted.rows[0];
+  let row = inserted.rows[0];
+  const isNew = row !== undefined;
+
+  if (!row) {
+    const existing = await client.query<{ id: string; created_at: Date }>(
+      `SELECT id, created_at
+         FROM matches
+        WHERE user_a_id = least($1::uuid, $2::uuid)
+          AND user_b_id = greatest($1::uuid, $2::uuid)`,
+      [a, b]
+    );
+    row = existing.rows[0];
+  }
+
   if (!row) return null;
 
   // `a` is the swiper, so `b` is the person on the card. The ids are uuids and
@@ -129,9 +142,12 @@ export async function createMatch(
   // driven by the call order, not by which is smaller, which is what
   // `least`/`greatest` did to the row.
   return {
-    id: row.id,
-    matchedAt: row.created_at.toISOString(),
-    user: await loadMatchSummary(client, b),
+    match: {
+      id: row.id,
+      matchedAt: row.created_at.toISOString(),
+      user: await loadMatchSummary(client, b),
+    },
+    isNew,
   };
 }
 
