@@ -23,7 +23,6 @@ import {
   scoreCompatibility,
   MATCH_WEIGHTS,
   type TasteSignal,
-  type CompatibilityBreakdown,
 } from '@/utils/matching';
 import { useAuthStore } from '@/stores/authStore';
 import { COLORS, FONT_SIZES, SPACING } from '@/constants';
@@ -260,7 +259,7 @@ function MatchBreakdown({
           Your match
         </Text>
         <Text variant="headlineMedium" style={styles.score}>
-          No match % yet
+          No score yet
         </Text>
         <Text variant="bodySmall" style={styles.scoreCaption}>
           {compatibilityLabel(result.score)}

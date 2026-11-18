@@ -1,15 +1,16 @@
 /**
  * The eligibility gate: who the viewer is allowed to be shown.
  *
- * Shared, verbatim, between the feed and the rescore. The two have to agree
- * exactly -- a stored score for somebody the feed then hides is a row that says
- * "high affinity" about a person who never appears, and a feed that shows
- * somebody the rescore never scored is a card with no percentage on it.
+ * Shared between the feed and the score rescore. The feed excludes people the
+ * viewer has already swiped on. The rescore does not: it stores one symmetric
+ * score in both directions, and the other person's feed may still show the
+ * viewer if they have not swiped yet.
  *
  * The rules, in the order they bite:
  *
  *  - You are not shown yourself.
- *  - You are not shown somebody you have already swiped on.
+ *  - When `excludeSwiped` is true, you are not shown somebody you have already
+ *    swiped on.
  *  - Your own filters apply: who you want to see, by gender, goal and age.
  *  - Their filters apply, pointed back at you. Eligibility is mutual, and a
  *    candidate whose own rules exclude you is somebody who will never see you
@@ -26,9 +27,21 @@
  * before the comparison, and a missing coordinate means "no distance limit
  * applies", not "too far".
  *
- * `$1` is the viewer's id.
+ * `$1` is the viewer's id. `excludeSwiped` defaults to true for feed reads; the
+ * score rescore passes false so it can keep both directions current.
  */
-export function eligibilitySql(): string {
+export function eligibilitySql(options: { excludeSwiped?: boolean } = {}): string {
+  const swipedClause =
+    options.excludeSwiped === false
+      ? ''
+      : `
+       -- Already decided on: the deck never shows somebody twice. The score
+       -- matrix omits this gate so the other person's reverse score stays fresh.
+       AND NOT EXISTS (
+         SELECT 1 FROM swipes s
+          WHERE s.actor_id = v.id AND s.target_user_id = c.id
+       )`;
+
   return `
     WITH viewer AS (
       SELECT u.id, u.gender, u.date_of_birth, u.latitude, u.longitude,
@@ -58,12 +71,7 @@ export function eligibilitySql(): string {
     CROSS JOIN viewer v
     LEFT JOIN user_preferences cp ON cp.user_id = c.id
     WHERE c.id <> v.id
-      -- Already decided on: the deck never shows somebody twice. This is the
-      -- swipedUserIds Set the mock built, now a unique index doing the work.
-      AND NOT EXISTS (
-        SELECT 1 FROM swipes s
-         WHERE s.actor_id = v.id AND s.target_user_id = c.id
-      )
+      ${swipedClause}
 
       /* --- the caller's own filters --- */
       AND (cardinality(v.wants_genders) = 0 OR c.gender = ANY (v.wants_genders))

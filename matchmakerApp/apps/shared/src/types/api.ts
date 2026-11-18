@@ -148,9 +148,9 @@ export interface TasteSummary {
    * promising a consequence it had already ruled out. Anything the summary names
    * is now somebody the caller could be shown.
    *
-   * The deck adds a bar on top: it only carries cards at 80%+. A named person
-   * below that bar is not a broken promise — more photo answers can lift them
-   * over it — but they will not appear in Likes until they do.
+    * The deck only carries cards at 80%+. A named person below that bar is not
+    * a broken promise — more photo answers can lift them over it — but they will
+    * not appear in Likes until they do.
    *
    * Ordered by `affinity`, strongest first, because the compact feed strip reads
    * as a list. The full profile screen presents these as a grid, where a grid has

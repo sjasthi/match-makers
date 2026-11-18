@@ -9,10 +9,10 @@
  *   npm run admin:backfill --workspace=apps/api
  */
 import { backfillAffinity } from '../src/affinity';
-import { pool } from '../src/db';
+import { pool, withTransaction } from '../src/db';
 
 async function main(): Promise<void> {
-  const rows = await backfillAffinity(pool);
+  const rows = await withTransaction((client) => backfillAffinity(client));
   const { rows: counts } = await pool.query<{ vectors: string; summaries: string }>(
     `SELECT (SELECT count(*) FROM user_tag_affinity)::text AS vectors,
             (SELECT count(*) FROM user_taste_summary)::text AS summaries`

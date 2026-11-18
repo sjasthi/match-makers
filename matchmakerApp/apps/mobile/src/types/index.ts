@@ -43,12 +43,13 @@ export interface FeedPage {
    */
   blockedReason: string | null;
   /**
-   * True when the deck is empty because the viewer has not liked any photos.
+   * True when the viewer has too little taste evidence for a settled score.
+   * Unscored eligible profiles are still hidden from the deck.
    *
    * The deck used to open with cards ranked on the twenty points of stated
    * fact — goal, orientation, verified — which handed a brand new account an
-   * "11% match, not enough to go on" card that meant nothing. An empty deck
-   * that says why is honest; a weak number dressed as a match is not.
+   * "11% match, not enough to go on" card that meant nothing. A null score is
+   * honest; a weak number dressed as a match is not.
    *
    * Separated from `blockedReason` on purpose: that field is about filters the
    * person can widen, and offering "adjust preferences" to somebody whose

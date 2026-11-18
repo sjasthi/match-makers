@@ -3,7 +3,12 @@ import { getAuthAdapter } from '@/services/auth';
 import { mockDb, toPublicUser } from '@/services/mock/database';
 import { simulateLatency, maybeSimulateFailure } from '@/services/mock/network';
 import { scoreCompatibility, type TasteSignal } from '@/utils/matching';
-import { buildTasteIndex, tasteBetween, type TasteIndex } from '@/utils/taste';
+import {
+  buildTasteIndex,
+  PHOTOS_FOR_FULL_TASTE,
+  tasteBetween,
+  type TasteIndex,
+} from '@/utils/taste';
 import { mutualGate, summariseBlockers, type BlockerCode } from '@/utils/eligibility';
 import type { FeedPage, SwipeOutcome, SwipeType } from '@/types';
 
@@ -22,16 +27,14 @@ async function loadTasteIndex(): Promise<TasteIndex> {
 }
 
 /**
- * Builds the deck: the people whose requirements you both satisfy *and* whose
- * photo score has reached 80%, best first.
+ * Builds the deck from mutually eligible profiles with a photo-taste score of
+ * at least 80%. A missing or lower score keeps a profile out of Likes.
  *
  * Eligibility and scoring are deliberately separate. `mutualGate` decides
  * who is allowed to appear at all, in both directions, and knows nothing about the score;
  * `scoreCompatibility` ranks the people who survived and knows nothing about
- * distance. On top of both, the deck only carries strong matches: a card with
- * no percentage, or a weak one, is a number that does not mean anything yet,
- * and an empty deck with an explanation beats a screenful of guesses. The API
- * route applies the same bar in SQL; the two must not drift.
+ * distance. Only scored candidates at or above 80% appear in the deck. The API
+ * route applies the same threshold.
  *
  * Scoring runs before filtering rather than after, so the breakdown that sorts
  * the deck is the same object the cards render. Computing it for people who get
@@ -51,16 +54,7 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     loadTasteIndex(),
   ]);
 
-  // The deck refuses to rank on nothing. With zero likes there are no photo
-  // signals, so every candidate would score null. An empty deck that says why
-  // is honest; a weak number dressed up as a match is not.
-  //
-  // A like, specifically, not an answer: dislikes never become shared evidence,
-  // they only steer the feed, so a history of nothing but passes leaves the
-  // matcher with exactly as much to rank on as no history at all.
-  if ((taste.likeCountByUser.get(viewer.id) ?? 0) === 0) {
-    return { items: [], page, pageSize, total: 0, hasMore: false, blockedReason: null, needsTaste: true };
-  }
+  const viewerLikes = taste.likeCountByUser.get(viewer.id) ?? 0;
 
   const scored = allUsers
     .filter((user) => user.id !== viewer.id)
@@ -101,11 +95,12 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     return b.breakdown.score - a.breakdown.score;
   });
 
-  // Only show strong matches (80%+)
-  const strongMatches = eligible.filter(({ breakdown }) => breakdown.score !== null && breakdown.score >= 80);
+  const visibleMatches = eligible.filter(
+    ({ breakdown }) => breakdown.score !== null && breakdown.score >= 80
+  );
 
   const start = (page - 1) * pageSize;
-  const items = strongMatches
+  const items = visibleMatches
     .slice(start, start + pageSize)
     .map(({ user, breakdown }) => ({ user: toPublicUser(user), compatibility: breakdown }));
 
@@ -113,14 +108,15 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     items,
     page,
     pageSize,
-    total: strongMatches.length,
-    hasMore: start + pageSize < strongMatches.length,
-    blockedReason: strongMatches.length === 0
-      ? eligible.length > 0
-        ? 'No strong matches yet — like more photos to find them.'
-        : summariseBlockers(blocked)
-      : null,
-    needsTaste: false,
+    total: visibleMatches.length,
+    hasMore: start + pageSize < visibleMatches.length,
+    blockedReason:
+      visibleMatches.length === 0
+        ? eligible.length > 0
+          ? 'No strong matches yet — like more photos to find them.'
+          : summariseBlockers(blocked)
+        : null,
+    needsTaste: viewerLikes < PHOTOS_FOR_FULL_TASTE,
   };
 }
 

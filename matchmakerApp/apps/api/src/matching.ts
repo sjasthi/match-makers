@@ -10,6 +10,10 @@ import type { Queryable } from '@/db';
  * ordered one way and a card explaining itself another way is a lie with two
  * authors.
  *
+ * A pair has one score, stored in both viewer/candidate directions. The
+ * shared-photo half ages from the later of the two likes, when the overlap
+ * first became real, so reversing the pair cannot change its score.
+ *
  * The tag half of the taste signal is a **cosine similarity** between the two
  * people's tag-weight vectors -- the dot product over the tags they share,
  * divided by the length of each vector. It replaces an earlier normalisation
@@ -186,17 +190,21 @@ function rankingCtes(eligibilitySql: string): string {
     ),
     co AS (
       /*
-       * Photos both people liked, weighted by how recently the viewer liked
-       * theirs.
+       * Photos both people liked, weighted by how recently the shared evidence
+       * was established: the later of the two likes. Using only the viewer's
+       * timestamp made the same pair score differently in the reverse deck.
        *
        * A raw count(*) would make a photo liked a year ago count exactly as
        * much as one liked this morning, which is the thing the half-life exists
        * to prevent -- and the co-like half is 65% of the signal, so leaving it
        * undecayed would make the decay almost invisible in the total.
        */
-      SELECT r2.user_id,
-             sum(exp(- extract(epoch FROM (now() - r1.created_at)) * ln(2) / ${HALF_LIFE_SECONDS})) AS co_likes,
-             count(*) AS co_count
+       SELECT r2.user_id,
+              sum(exp(
+                - extract(epoch FROM (now() - GREATEST(r1.created_at, r2.created_at)))
+                  * ln(2) / ${HALF_LIFE_SECONDS}
+              )) AS co_likes,
+              count(*) AS co_count
         FROM post_reactions r1
         JOIN post_reactions r2
           ON r2.post_id = r1.post_id
@@ -260,30 +268,40 @@ export function rankingSelectSql(eligibilitySql: string): string {
 }
 
 /**
- * Recomputes and stores one viewer's ranking.
+ * Recomputes scores for one person's pairs and stores each score in both
+ * directions.
  *
- * The rows for candidates who are no longer eligible are removed, so a stored
- * ranking cannot keep offering somebody the viewer has since filtered out.
+ * Rows involving this person are replaced, including the reverse rows. A
+ * changed reaction affects both their own ranking and how everyone else ranks
+ * them. The eligibility SQL must omit the already-swiped gate: someone who has
+ * swiped may still appear in the other person's deck.
  *
- * Returns the number of candidates scored.
+ * Returns the number of candidate pairs scored (not the two stored rows per
+ * pair).
  */
 export async function rescoreForViewer(
   client: Queryable,
   viewerId: string,
   eligibilitySql: string
 ): Promise<number> {
-  // Replace rather than merge: the set of eligible candidates changes with the
-  // viewer's preferences, and a row left behind would be a score for somebody
-  // they can no longer see.
-  await client.query('DELETE FROM match_scores WHERE viewer_id = $1', [viewerId]);
+  // Replace every cached direction involving this person. A changed reaction
+  // affects both their own ranking and how everyone else ranks them.
+  await client.query(
+    `DELETE FROM match_scores WHERE viewer_id = $1 OR candidate_id = $1`,
+    [viewerId]
+  );
 
   const { rowCount } = await client.query(
     `
     INSERT INTO match_scores
       (viewer_id, candidate_id, score, taste_affinity, co_liked_count, shared_tags, band, computed_at)
-    SELECT $1, f.id, f.score, f.taste_affinity, f.co_liked_count, f.shared_tags,
+    SELECT pair.viewer_id, pair.candidate_id, f.score, f.taste_affinity, f.co_liked_count, f.shared_tags,
            ${bandSql('f.score')}, now()
       FROM (${rankingSelectSql(eligibilitySql)}) f
+      CROSS JOIN LATERAL (
+        VALUES ($1::uuid, f.id), (f.id, $1::uuid)
+      ) AS pair(viewer_id, candidate_id)
+     ORDER BY pair.viewer_id, pair.candidate_id
     ON CONFLICT (viewer_id, candidate_id) DO UPDATE SET
       score = EXCLUDED.score,
       taste_affinity = EXCLUDED.taste_affinity,
@@ -295,7 +313,20 @@ export async function rescoreForViewer(
     [viewerId]
   );
 
-  return rowCount ?? 0;
+  return Math.floor((rowCount ?? 0) / 2);
+}
+
+/** Rescores a known set of viewers, keeping one shared eligibility definition. */
+export async function rescoreViewers(
+  client: Queryable,
+  viewerIds: readonly string[],
+  eligibilitySql: string
+): Promise<number> {
+  let scored = 0;
+  for (const viewerId of viewerIds) {
+    scored += await rescoreForViewer(client, viewerId, eligibilitySql);
+  }
+  return scored;
 }
 
 /**

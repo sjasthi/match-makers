@@ -212,7 +212,7 @@ describe('compatibilityLabel', () => {
 
   it('says there is not enough to go on at null (no photo evidence)', () => {
     // Null means "no shared evidence yet", not "definitely incompatible".
-    expect(compatibilityLabel(null)).toBe('No match % yet');
+    expect(compatibilityLabel(null)).toBe('No score yet');
   });
 });
 

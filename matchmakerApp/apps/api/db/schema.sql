@@ -379,7 +379,9 @@ CREATE INDEX IF NOT EXISTS user_tag_affinity_tag_idx
 -- ---------------------------------------------------------------------------
 -- match_scores
 -- ---------------------------------------------------------------------------
--- The computed ranking, one row per (viewer, candidate) pair.
+-- The computed ranking, stored in both directions for every eligible pair.
+-- The two rows carry the same symmetric score; the viewer-leading index below
+-- lets each feed read that value in score order.
 --
 -- Computing the affinity for a whole candidate pool is expensive: the overlap
 -- join reads every candidate's row for every tag the viewer leans towards, which
@@ -391,9 +393,8 @@ CREATE INDEX IF NOT EXISTS user_tag_affinity_tag_idx
 -- spec calls "background workers or database functions properly rescore candidate
 -- pools".
 --
--- `computed_at` is what makes a stale score visible rather than silently wrong.
--- A score older than the viewer's most recent reaction describes a taste they no
--- longer have.
+-- `computed_at` records when the pair was last refreshed. A reaction by either
+-- person changes the pair score, so both directions must be updated together.
 CREATE TABLE IF NOT EXISTS match_scores (
   viewer_id      uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   candidate_id   uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,

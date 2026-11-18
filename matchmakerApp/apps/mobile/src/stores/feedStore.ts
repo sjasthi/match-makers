@@ -26,10 +26,9 @@ interface FeedStore {
   lastMatch: SwipeOutcome | null;
   isSwiping: boolean;
   /**
-   * True when the deck came back empty because the viewer has not liked a photo.
+   * True when the viewer has too little photo-taste evidence for settled scores.
    *
-   * The deck refuses to rank on nothing, so a brand new account gets an empty
-   * deck with an explanation rather than cards scored on stated facts alone.
+   * Unscored profiles remain hidden until they reach the strong-match threshold.
    * Arrives with the page for the same reason `blockedReason` does.
    */
   needsTaste: boolean;

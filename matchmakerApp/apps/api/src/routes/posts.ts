@@ -16,7 +16,8 @@ import { pool, withTransaction, type Queryable } from '@/db';
 import { toPost, type PostRow } from '@/db/rows';
 import { ApiError } from '@/errors';
 import { asyncHandler, parse, send } from '@/http';
-import { rescoreForViewer } from '@/matching';
+import { rescoreForViewer, rescoreViewers } from '@/matching';
+import { deletePostAndRebuildTaste } from '@/postDeletion';
 
 export const postsRouter = Router();
 
@@ -191,9 +192,9 @@ postsRouter.post(
       }
       await applyReactionToAffinity(client, viewerId, tags, body.action);
 
-      // The feed reads cached scores. Rebuild this viewer's rows in the same
-      // transaction as the reaction so the next GET /feed sees the new ranking.
-      await rescoreForViewer(client, viewerId, eligibilitySql());
+      // The feed reads cached pair scores. Refresh both directions for every
+      // pair involving this person in the same transaction as the reaction.
+      await rescoreForViewer(client, viewerId, eligibilitySql({ excludeSwiped: false }));
 
       const row = rows[0];
       return {
@@ -250,7 +251,7 @@ postsRouter.delete(
 
       if (row && (deleted.rowCount ?? 0) > 0) {
         await applyReactionToAffinity(client, viewerId, row.tags, row.action, { undo: true });
-        await rescoreForViewer(client, viewerId, eligibilitySql());
+        await rescoreForViewer(client, viewerId, eligibilitySql({ excludeSwiped: false }));
       }
 
       return (deleted.rowCount ?? 0) > 0;
@@ -373,6 +374,12 @@ postsRouter.patch(
           });
           await applyReactionToAffinity(client, reactor.user_id, body.tags, reactor.action);
         }
+
+        await rescoreViewers(
+          client,
+          [...new Set(reactors.rows.map((reactor) => reactor.user_id))],
+          eligibilitySql({ excludeSwiped: false })
+        );
       }
 
       const { rows: post } = await client.query<PostRow>(`${SELECT_POSTS} WHERE id = $1`, [postId]);
@@ -478,12 +485,25 @@ postsRouter.delete(
   asyncHandler(async (req, res) => {
     const { postId } = parse(postIdSchema, req.params);
 
-    const { rowCount } = await pool.query('DELETE FROM posts WHERE id = $1', [postId]);
+    const deleted = await withTransaction(async (client) => {
+      const result = await deletePostAndRebuildTaste(client, postId);
+      if (result.deleted && result.affectedUserIds.length > 0) {
+        // A removed reaction changes both that person's taste as a viewer and
+        // their taste as a candidate for everyone else. Refresh the whole score
+        // matrix before committing so no feed can read stale percentages.
+        await rescoreViewers(
+          client,
+          result.affectedUserIds,
+          eligibilitySql({ excludeSwiped: false })
+        );
+      }
+      return result.deleted;
+    });
 
     // Reported rather than always answering 200, so a double-tap is
     // distinguishable from a real delete, the way `DELETE
     // /posts/reactions/:postId` already does it.
-    send(res, { postId, deleted: (rowCount ?? 0) > 0 });
+    send(res, { postId, deleted });
   })
 );
 

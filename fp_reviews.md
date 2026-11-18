@@ -542,3 +542,16 @@ Success criteria
   the demo's identity-proof limitation stated honestly.
 - A message is saved and visible to both participants, including after a reconnect or
   polling fallback.
+
+[FP11] 11/18/2026
+### Handoff: connect your database to Match Makers.
+From the `matchmakerApp` folder:
+- **Connect PostgreSQL:** Copy `apps/api/.env.example` to `apps/api/.env`, set
+  `DATABASE_URL`, then run `npm run migrate --workspace=apps/api` and
+  `npm run dev --workspace=apps/api`. The migration creates the tables; it does not
+  import existing records.
+- **Import existing data:** Back it up, then map records into the tables in
+  `apps/api/db/schema.sql`, keeping IDs and relationships intact. Test with a separate
+  database first; there is no automatic data importer.
+- **Connect the app:** Set `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_AUTH_MODE=jwt` in
+  `apps/mobile/.env`. The app talks to the API, not directly to PostgreSQL.

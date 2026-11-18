@@ -49,7 +49,7 @@ export function PersonTile({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${name}${score !== null ? `, ${score}% match` : ', no match % yet'}${reason ? `. ${reason}` : ''}`}
+      accessibilityLabel={`${name}${score !== null ? `, ${score}% match` : ', no score yet'}${reason ? `. ${reason}` : ''}`}
       style={styles.tile}
       testID={`${testPrefix}-${userId}`}
     >
@@ -60,7 +60,7 @@ export function PersonTile({
       </Text>
 
       <Text variant="titleMedium" style={styles.score}>
-        {score !== null ? `${score}%` : 'No match % yet'}
+        {score !== null ? `${score}%` : 'No score yet'}
       </Text>
 
       {band && band !== '50+' && band !== 'below-50' ? (

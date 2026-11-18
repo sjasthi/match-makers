@@ -292,7 +292,7 @@ describe('match and message websocket updates', () => {
     );
   });
 
-  test('automatically rescales the viewer deck after a like and an undo', async (t) => {
+  test('automatically rescales both pair directions after a like and an undo', async (t) => {
     if (!databaseAvailable) {
       t.skip('no database available');
       return;
@@ -302,6 +302,11 @@ describe('match and message websocket updates', () => {
     const candidateId = await createUser('Automatic rescore candidate');
     await givePreferences(viewerId);
     await givePreferences(candidateId);
+    await pool.query(
+      `INSERT INTO swipes (actor_id, target_user_id, action)
+       VALUES ($1, $2, 'like')`,
+      [viewerId, candidateId]
+    );
 
     const postIds: string[] = [];
     for (let index = 0; index < 5; index += 1) {
@@ -320,14 +325,17 @@ describe('match and message websocket updates', () => {
     }
 
     // Establish the saved baseline, then exercise the same mutation routes the
-    // app uses. The route must maintain this cache without the CLI.
-    await rescoreForViewer(pool, viewerId, eligibilitySql());
+    // app uses. The route must maintain the same pair score in both directions
+    // without the CLI.
+    await rescoreForViewer(pool, viewerId, eligibilitySql({ excludeSwiped: false }));
     const beforeUndo = await storedScore(viewerId, candidateId);
+    assert.equal(await storedScore(candidateId, viewerId), beforeUndo);
 
     const removed = await remove(`/posts/reactions/${postIds[4]}`, viewerId);
     assert.equal(removed.status, 200);
     assert.deepEqual(await removed.json(), { data: { removed: true } });
     const afterUndo = await storedScore(viewerId, candidateId);
+    assert.equal(await storedScore(candidateId, viewerId), afterUndo);
     assert.ok(afterUndo < beforeUndo, `undo should lower the stored score (${beforeUndo} -> ${afterUndo})`);
 
     const restored = await post('/posts/reactions', viewerId, {
@@ -336,6 +344,7 @@ describe('match and message websocket updates', () => {
     });
     assert.equal(restored.status, 201);
     const afterLike = await storedScore(viewerId, candidateId);
+    assert.equal(await storedScore(candidateId, viewerId), afterLike);
     assert.ok(afterLike > afterUndo, `a new shared like should raise the score (${afterUndo} -> ${afterLike})`);
   });
 });

@@ -18,7 +18,7 @@ export const feedRouter = Router();
  * it, and the shared package is the domain model.
  */
 interface FeedPage {
-  items: Array<{ user: User; compatibility: CompatibilityBreakdown; band: string }>;
+  items: Array<{ user: User; compatibility: CompatibilityBreakdown; band?: string }>;
   page: number;
   pageSize: number;
   total: number;
@@ -49,17 +49,16 @@ const feedQuerySchema = z.object({
  * alternative was computing the whole pool's affinity on every request, which
  * measured at 569ms over 400,000 rows.
  *
- * Only strong matches (80%+) are kept. A candidate with no stored score, or
- * one below the bar, is simply not in the deck: the percentage is photo taste
- * and nothing else, and showing a card that admits it has no number yet is a
- * worse promise than an empty deck that says why.
+ * Only candidates with a current photo-taste score of at least 80% are kept.
+ * Candidates with no score or a lower score do not enter the Likes deck.
  */
 interface CandidateRow extends UserRow {
   distance_km: number | null;
   total_count: string;
-  /** Set by the outer query: how many strong matches exist in total. */
+  /** Set by the outer query: strong-match count before paging. */
   strong_total: string;
   photos: PhotoRow[] | null;
+  score: number | null;
   stored_score: number | null;
   stored_affinity: number | null;
   stored_co_liked: number | null;
@@ -75,10 +74,9 @@ interface CandidateRow extends UserRow {
  * over every user in the database; that gate lives in SQL now, and the ranking
  * is a stored result rather than something computed per request.
  *
- * Only strong matches come back: a card needs a stored photo score of 80%+ to
- * appear at all. The percentage is photo taste and nothing else, so a deck of
- * unrated or weakly-rated cards is a deck of numbers that do not mean anything
- * yet -- and an empty deck with an explanation beats a screenful of guesses.
+ * Only scored matches at 80% or above come back. A post deletion refreshes the
+ * score cache before this query, so a stale high percentage cannot keep a
+ * candidate in the deck after its evidence is gone.
  *
  * Both directions are load-bearing. The caller's filters decide what they are
  * shown, but a candidate whose own filters exclude the caller is someone who
@@ -125,20 +123,17 @@ feedRouter.get(
       )
       SELECT
         strong_matches.*,
-        -- How many strong matches exist across the whole filtered set,
-        -- computed before LIMIT so paging knows the real size. Named apart
-        -- from total_count (the eligible-pool count the gate carries) so the
-        -- two numbers cannot overwrite each other in the row object.
+        -- Count before LIMIT so paging knows the full strong-match set.
         COUNT(*) OVER ()::text AS strong_total
       FROM strong_matches
-      ORDER BY score DESC, created_at DESC, id
+      ORDER BY score DESC NULLS LAST, created_at DESC, id
       LIMIT $2 OFFSET $3
       `,
       [viewerId, pageSize, (page - 1) * pageSize]
     );
 
-    // `COUNT(*) OVER ()` runs over the strong-match set before LIMIT, so
-    // `total` is the real number of cards rather than "however many came back".
+    // `COUNT(*) OVER ()` runs over the strong-match set before LIMIT, so `total`
+    // is the real number of cards rather than "however many came back".
     // It is null on an empty page, hence the `?? 0`.
     const total = rows.length > 0 ? Number(rows[0]?.strong_total ?? 0) : 0;
 
@@ -156,14 +151,17 @@ feedRouter.get(
       items: rows.map((row) => ({
         user: toCandidate(row),
         compatibility: {
-          score: row.stored_score,
+          score: row.score,
           sharedGoals: row.shared_goals,
-          tasteAffinity: row.stored_affinity ?? 0,
-          coLikedPosts: row.stored_co_liked ?? 0,
-          sharedTags: row.stored_tags ?? [],
-          reason: describeAffinity(row.stored_co_liked ?? 0, row.stored_tags ?? []),
+          tasteAffinity: Number(row.stored_affinity ?? 0),
+          coLikedPosts: row.score === null ? 0 : (row.stored_co_liked ?? 0),
+          sharedTags: row.score === null ? [] : (row.stored_tags ?? []),
+          reason:
+            row.score === null
+              ? null
+              : describeAffinity(row.stored_co_liked ?? 0, row.stored_tags ?? []),
         },
-        band: row.stored_band ?? (row.stored_score !== null ? bandFor(row.stored_score) : 'below-50'),
+        ...(row.score !== null ? { band: row.stored_band ?? bandFor(row.score) } : {}),
       })),
       page,
       pageSize,

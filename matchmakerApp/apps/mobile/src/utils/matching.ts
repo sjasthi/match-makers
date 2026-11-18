@@ -1,4 +1,4 @@
-import type { RelationshipGoal, User } from '@match-makers/shared';
+import type { User } from '@match-makers/shared';
 
 /**
  * Point budget.
@@ -43,7 +43,7 @@ const NO_TASTE: TasteSignal = { affinity: 0, coLikedPosts: 0, sharedTags: [], re
  * Scores a candidate out of 100 based purely on photo taste affinity.
  *
  * Returns null when there is no taste signal (affinity = 0), so the UI can show
- * "No match % yet" instead of a misleading 0%.
+ * "No score yet" instead of a misleading 0%.
  */
 export function scoreCompatibility(
   viewer: User,
@@ -99,7 +99,7 @@ function round2(value: number): number {
 }
 
 export function compatibilityLabel(score: number | null): string {
-  if (score === null) return 'No match % yet';
+  if (score === null) return 'No score yet';
   if (score >= 80) return 'Strong match';
   if (score >= 60) return 'Good match';
   if (score >= 40) return 'Worth a look';

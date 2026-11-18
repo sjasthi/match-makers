@@ -81,6 +81,16 @@ async function like(userId: string, postId: string): Promise<void> {
   );
 }
 
+async function likeAt(userId: string, postId: string, createdAt: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO post_reactions (user_id, post_id, action, created_at)
+     VALUES ($1, $2, 'like', $3)
+     ON CONFLICT (user_id, post_id)
+     DO UPDATE SET action = 'like', created_at = EXCLUDED.created_at`,
+    [userId, postId, createdAt]
+  );
+}
+
 /** The stored score for one pair, and the numbers behind it. */
 async function scoreFor(
   viewerId: string,
@@ -232,6 +242,38 @@ describe('the ranking, against the database', () => {
       `neighbour (${neighbourScore.affinity}) should beat stranger (${strangerScore.affinity})`
     );
     assert.equal(strangerScore.affinity, 0, 'a pair with nothing shared scores zero');
+  });
+
+  test('stores one symmetric score in both directions despite different like times', async (t) => {
+    if (!available) {
+      t.skip('no database available');
+      return;
+    }
+
+    const earlier = await makeUser('symmetric-earlier@test.local');
+    const later = await makeUser('symmetric-later@test.local');
+    const sharedPosts = await Promise.all(
+      Array.from({ length: 5 }, () => makePost(['shared-interest']))
+    );
+    const earlierLike = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString();
+    const laterLike = new Date(Date.now() - 1000).toISOString();
+
+    for (const postId of sharedPosts) {
+      await likeAt(earlier, postId, earlierLike);
+      await likeAt(later, postId, laterLike);
+    }
+
+    await rebuildVectors(pool);
+    await rescoreForViewer(pool, earlier, ELIGIBILITY);
+
+    const fromEarlier = await scoreFor(earlier, later);
+    const fromLater = await scoreFor(later, earlier);
+    assert.deepEqual(fromEarlier, fromLater);
+
+    // Recomputing from the reverse viewer must not change the pair's score.
+    await rescoreForViewer(pool, later, ELIGIBILITY);
+    assert.deepEqual(await scoreFor(earlier, later), fromEarlier);
+    assert.deepEqual(await scoreFor(later, earlier), fromEarlier);
   });
 
   test('the tag half is a cosine, so a broad taste does not equal a narrow one', async (t) => {

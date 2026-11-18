@@ -295,7 +295,7 @@ describeIfLive('app services against apps/api + Postgres', () => {
     expect(removed).toBe(true);
   });
 
-  it('builds a deck from Postgres and matches on reciprocal likes', async () => {
+  it('hides unscored profiles and matches on reciprocal likes', async () => {
     candidateId = await registerThroughTheApp(
       candidateEmail,
       'ITest Candidate',
@@ -322,10 +322,11 @@ describeIfLive('app services against apps/api + Postgres', () => {
     await auth.getAuthAdapter().login({ email: viewerEmail, password: 'Password1' });
 
     const page = await feedService.fetchFeed(1, 10);
-    expect(page.items.map((item: { user: { id: string } }) => item.user.id)).toContain(candidateId);
-
-    // The shared-taste 80 points are not scored server-side yet, so the deck
-    // never claims a settled percentage.
+    // The profile is eligible but has no photo-taste score, so it stays out of
+    // the 80%+ deck until enough matching evidence exists.
+    expect(page.items.map((item: { user: { id: string } }) => item.user.id)).not.toContain(
+      candidateId
+    );
     expect(page.needsTaste).toBe(true);
 
     const first = await feedService.sendSwipe(candidateId, 'like');

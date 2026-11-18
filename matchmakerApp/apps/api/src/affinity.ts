@@ -146,47 +146,67 @@ export async function applyReactionToAffinity(
 }
 
 /**
- * Rebuilds the whole vector from the reactions table.
+ * Rebuilds the taste vectors and summaries for a set of users from their
+ * remaining reactions.
  *
- * Needed once, when the table is new, so history that predates it still counts.
- * Written as one statement rather than a loop: the reactions are already
- * aggregated, and a row per (user, tag) falls out of the join to `posts`.
- *
- * `last_activity_at` is the newest reaction for that (user, tag), which is the
- * value the incremental writes would have maintained.
+ * Replacing the rows, rather than only upserting the aggregates, is important
+ * when a post is deleted: its reactions cascade away, and tags that no longer
+ * have any reactions must disappear from the vector too.
  */
-export async function backfillAffinity(client: Queryable): Promise<number> {
+export async function rebuildAffinityForUsers(
+  client: Queryable,
+  userIds: readonly string[]
+): Promise<number> {
+  if (userIds.length === 0) return 0;
+
+  await client.query('DELETE FROM user_tag_affinity WHERE user_id = ANY($1::uuid[])', [userIds]);
+
   const { rowCount } = await client.query(
     `INSERT INTO user_tag_affinity (user_id, tag, likes, dislikes, last_activity_at)
      SELECT r.user_id,
             tag,
-            count(*) FILTER (WHERE r.action = 'like'),
-            count(*) FILTER (WHERE r.action = 'dislike'),
+            count(*) FILTER (WHERE r.action = 'like')::integer,
+            count(*) FILTER (WHERE r.action = 'dislike')::integer,
             max(r.created_at)
        FROM post_reactions r
        JOIN posts p ON p.id = r.post_id
        CROSS JOIN LATERAL unnest(p.tags) AS tag
+      WHERE r.user_id = ANY($1::uuid[])
       GROUP BY r.user_id, tag
-     ON CONFLICT (user_id, tag) DO UPDATE SET
-            likes = EXCLUDED.likes,
-            dislikes = EXCLUDED.dislikes,
-            last_activity_at = EXCLUDED.last_activity_at`
+      ON CONFLICT (user_id, tag) DO UPDATE SET
+        likes = EXCLUDED.likes,
+        dislikes = EXCLUDED.dislikes,
+        last_activity_at = EXCLUDED.last_activity_at`,
+    [userIds]
   );
 
-  // The summary rows, from the vector just built.
+  // Rebuild even users who now have no likes, so stale positive counts become 0.
   await client.query(
     `INSERT INTO user_taste_summary (user_id, positive_tags, likes)
-     SELECT a.user_id,
-            count(*) FILTER (WHERE a.likes > a.dislikes),
-            (SELECT count(*) FROM post_reactions r WHERE r.user_id = a.user_id AND r.action = 'like')
-       FROM user_tag_affinity a
-      GROUP BY a.user_id
+     SELECT affected.user_id,
+            (SELECT count(*)
+               FROM user_tag_affinity a
+              WHERE a.user_id = affected.user_id AND a.likes > a.dislikes)::integer,
+            (SELECT count(*)
+               FROM post_reactions r
+              WHERE r.user_id = affected.user_id AND r.action = 'like')::integer
+       FROM unnest($1::uuid[]) AS affected(user_id)
      ON CONFLICT (user_id) DO UPDATE SET
-            positive_tags = EXCLUDED.positive_tags,
-            likes = EXCLUDED.likes`
+       positive_tags = EXCLUDED.positive_tags,
+       likes = EXCLUDED.likes`,
+    [userIds]
   );
 
   return rowCount ?? 0;
+}
+
+/** Rebuilds every stored taste vector, including users whose vectors are now empty. */
+export async function backfillAffinity(client: Queryable): Promise<number> {
+  const { rows } = await client.query<{ id: string }>('SELECT id FROM users ORDER BY id');
+  return rebuildAffinityForUsers(
+    client,
+    rows.map((row) => row.id)
+  );
 }
 
 /**

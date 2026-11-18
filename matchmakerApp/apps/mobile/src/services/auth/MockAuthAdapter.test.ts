@@ -21,10 +21,9 @@ async function othersApartFromDemo(): Promise<Array<User & { password: string }>
 
 async function seedAndSignIn(): Promise<MockAuthAdapter> {
   await mockDb.reset();
-  // The deck refuses to rank on nothing, so a viewer with no likes gets an
-  // empty deck by design. These tests are about eligibility and ordering, not
-  // about that gate, so the demo account gets one like to stand in for the
-  // taste a real person would have created by answering photos.
+  // These tests exercise scored ordering, so the demo account gets one like.
+  // Fresh viewers can still see eligible profiles with "No score yet" before
+  // they have any photo-taste evidence.
   const posts = await mockDb.allPosts();
   await mockDb.recordPostReaction('user_demo', posts[0]!.id, 'like');
   const adapter = new MockAuthAdapter();

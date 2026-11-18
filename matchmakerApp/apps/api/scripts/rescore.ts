@@ -2,9 +2,10 @@
  * Rebuilds stored rankings for every account, or one account.
  *
  * The feed reads `match_scores` rather than computing the ranking per request,
- * because computing it costs 569ms over 400,000 rows. Reaction writes rescore
- * the acting viewer automatically; this command is for a full rebuild, recovery
- * after bulk changes, or an explicit one-account repair.
+ * because computing it costs 569ms over 400,000 rows. Reaction writes refresh
+ * both directions for the acting user's pairs automatically; this command is
+ * for a full rebuild, recovery after bulk changes, or an explicit one-account
+ * repair.
  *
  *   npm run rescore --workspace=apps/api              # everyone
  *   npm run rescore --workspace=apps/api -- <email>   # one person
@@ -35,7 +36,7 @@ async function main(): Promise<void> {
   let scored = 0;
 
   for (const viewer of viewers) {
-    const count = await rescoreForViewer(pool, viewer.id, eligibilitySql());
+    const count = await rescoreForViewer(pool, viewer.id, eligibilitySql({ excludeSwiped: false }));
     scored += count;
     console.log(`  ${viewer.email.padEnd(38)} ${count} candidate(s)`);
   }

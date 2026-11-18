@@ -69,15 +69,16 @@ async function signInDemo() {
 /**
  * Builds a deterministic strong-match deck.
  *
- * The Likes deck only carries cards at 80%+, and the mock scores live from the
- * reactions table, so a single like no longer fills a grid. Here the demo and
+ * The Likes deck only carries 80%+ scored cards. The mock scores live from the
+ * reactions table, so a single like does not fill a grid with fake percentages.
+ * Here the demo and
  * two eligible candidates all like the same six photos, which lands each pair
  * at `0.65 * 6/(6+2) + 0.35 * 1 = 84%`. The candidates' *other* seeded
  * reactions are removed rather than flipped to dislikes — a negative opinion
  * cancels the tag on the demo's otherwise identical vector and sinks the
- * cosine below the bar. Everybody else's likes are flipped to dislikes so the
- * only pairs with shared positive evidence are the two built here, and the
- * grid is exactly those two cards.
+ * cosine below the bar. Everybody else's likes are flipped to dislikes, so the
+ * two selected candidates are the only scored strong matches, so the grid
+ * contains exactly those two cards.
  */
 async function makeStrongTaste() {
   const posts = await mockDb.allPosts();
@@ -123,50 +124,54 @@ beforeEach(async () => {
 afterEach(cleanup);
 
 describe('a brand new account with no likes', () => {
-  it('gets an empty deck that says why, rather than a card ranked on nothing', async () => {
+  it('hides eligible profiles until they reach the 80% threshold', async () => {
     renderLikes();
 
-    // The deck refuses to rank on the twenty points of stated fact. The old
-    // behaviour handed a fresh account an "11% match, not enough to go on" card,
-    // which taught anybody who looked at it that the percentage meant nothing.
     await waitFor(() =>
       expect(screen.getByText('Nothing to rank your matches on yet')).toBeTruthy()
     );
-
-    expect(screen.queryByTestId(/deck-card-/)).toBeNull();
+    expect(screen.queryByTestId(/^deck-card-/)).toBeNull();
     expect(screen.getByText('Go to the photos')).toBeTruthy();
   });
 
-  it('offers no swipe buttons, because there is nobody to decide about', async () => {
+  it('does not offer swipe actions for profiles without a qualifying score', async () => {
     renderLikes();
 
     await waitFor(() =>
       expect(screen.getByText('Nothing to rank your matches on yet')).toBeTruthy()
     );
-
     expect(screen.queryByTestId('swipe-like')).toBeNull();
   });
 
   it('says "no strong matches yet" when people are eligible but below the bar', async () => {
-    // One like with nothing co-liked: the eligibility gates pass, but the photo
-    // score is nowhere near 80%+, and a card admitting it has no number yet is
-    // worse than an empty deck that explains the bar.
-    const posts = await mockDb.allPosts();
-    await mockDb.recordPostReaction('user_demo', posts[0]!.id, 'like');
+    const users = await mockDb.allUsers();
+    const demo = users.find((user) => user.id === 'user_demo')!;
+    const eligible = users.filter((user) => user.id !== demo.id && mutualGate(demo, user).eligible);
+    const sharedPosts = (await mockDb.allPosts()).slice(0, 10);
+
+    // Remove the default candidate opinions, then give every eligible pair the
+    // only one of the ten viewer likes. It produces a real score below 80.
+    for (const reaction of await mockDb.allPostReactions()) {
+      await mockDb.removePostReaction(reaction.userId, reaction.postId);
+    }
+    for (const post of sharedPosts) {
+      await mockDb.recordPostReaction(demo.id, post.id, 'like');
+    }
+    for (const user of eligible) {
+      await mockDb.recordPostReaction(user.id, sharedPosts[0]!.id, 'like');
+    }
     usePhotoFeedStore.getState().reset();
 
     renderLikes();
 
-    await waitFor(() =>
-      expect(screen.getByText('No strong matches yet')).toBeTruthy()
-    );
+    await waitFor(() => expect(screen.getByText('No strong matches yet')).toBeTruthy());
     expect(screen.queryByTestId(/deck-card-/)).toBeNull();
     expect(screen.getByText('Go to the photos')).toBeTruthy();
   });
 });
 
 describe('an account with taste', () => {
-  it('shows the whole pool at once, with the percentage on each card', async () => {
+  it('shows only strong scored profiles', async () => {
     await makeStrongTaste();
     renderLikes();
 
@@ -175,8 +180,9 @@ describe('an account with taste', () => {
     // One card at a time hid the shape of the pool. A grid shows everybody the
     // matcher is offering, so the choice is visibly a choice.
     expect(tiles.length).toBeGreaterThan(1);
-    // The deck's own number, so there is one meaning for the word "match".
-    expect(screen.getAllByText(/\d+%/).length).toBe(tiles.length);
+    expect(tiles).toHaveLength(2);
+    expect(screen.getAllByText(/\d+%/)).toHaveLength(tiles.length);
+    expect(screen.queryByText('No score yet')).toBeNull();
   });
 
   it('decides on one person at a time, chosen by the person deciding', async () => {

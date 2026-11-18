@@ -31,7 +31,7 @@ import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
  * being told who to like, rather than being shown a choice. And one card at a
  * time hides the shape of the pool: a grid shows everybody the matcher is
  * offering at once, with the percentage on each, so the choice is visibly a
- * choice.
+ * choice. Profiles without an 80% score stay out of the grid.
  *
  * Deciding is still one person at a time — tapping a tile opens them full
  * screen with the like/pass buttons — because that is the one thing the old
@@ -65,10 +65,6 @@ export function LikesScreen() {
     }
   }, [hasMore, profiles.length, state, loadMore]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   // How much of the taste signal exists yet, which is what decides whether the
   // percentage on a tile means anything.
   const summary = usePhotoFeedStore((store) => store.summary);
@@ -79,14 +75,13 @@ export function LikesScreen() {
   const progress = tasteProgress(summary.likes + summary.dislikes);
 
   /**
-   * Keep the deck warm when returning from another tab.
+   * Refresh the deck whenever it regains focus.
    *
    * The guard reads through a ref rather than closing over `state` and
    * `profiles`. `useFocusEffect` re-runs its effect whenever the callback
-   * identity changes, so a callback that depended on the values it reads
-   * re-arms itself after every load: load succeeds, the deck is empty, the
-   * effect refetches, state changes, the effect refetches. An empty deck is a
-   * state this screen has to survive, and that is the state that loops.
+   * identity changes. Reading the state from the ref keeps the callback stable
+   * while still letting a return from the photo admin screen pick up deleted
+   * posts and their recalculated scores.
    */
   const queue = useRef({ state, profiles });
   queue.current = { state, profiles };
@@ -94,9 +89,8 @@ export function LikesScreen() {
   useFocusEffect(
     useCallback(() => {
       const current = queue.current;
-      if (current.state === 'success' && current.profiles.length === 0) {
-        void load({ refresh: true });
-      }
+      if (current.state === 'loading' || current.state === 'refreshing') return;
+      void load({ refresh: current.profiles.length > 0 });
     }, [load])
   );
 
@@ -164,16 +158,14 @@ export function LikesScreen() {
 
         {showEmptyState && needsTaste ? (
           /*
-            The deck refuses to rank on nothing, so a brand new account gets an
-            explanation instead of cards scored on the twenty points of stated
-            fact. This is the empty state the old "hand them a card anyway"
-            behaviour replaced: an 11% match with no reason behind it taught
-            people the percentage meant nothing.
+            Eligible profiles normally remain visible with "No score yet". This
+            fallback is for a backend that reports no taste evidence but has no
+            unscored eligible profiles to show.
           */
           <EmptyState
             icon="📷"
             title="Nothing to rank your matches on yet"
-            message="Like a photo or two and we will have something to go on. Until then, anybody we showed you would just be a guess."
+            message="Like a photo or two to build your taste score. Eligible profiles can still appear with no score yet."
             actionLabel="Go to the photos"
             onAction={() => tabNavigation.navigate('Feed')}
           />

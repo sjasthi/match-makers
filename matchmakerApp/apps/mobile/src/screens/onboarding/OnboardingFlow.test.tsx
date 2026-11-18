@@ -181,32 +181,40 @@ describe('account creation', () => {
     expect(screen.queryByText('Day to day, the unglamorous stuff')).toBeNull();
   });
 
-  it('gives a brand new account an empty deck that says why, not a weak card', async () => {
+  it('hides eligible profiles with no score before the new account likes photos', async () => {
     await registerAndRender();
     await completeCreation();
+
+    // Ensure the fixture has eligible profiles so the empty deck is caused by
+    // the score threshold, not by unrelated preferences.
+    const adapter = getAuthAdapter();
+    const stored = (await adapter.getCurrentUser())!;
+    await adapter.updateProfile({
+      preferences: {
+        ...stored.preferences,
+        genders: [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY],
+        ageRange: { min: 18, max: 99 },
+        relationshipGoals: [
+          RelationshipGoal.LONG_TERM,
+          RelationshipGoal.SHORT_TERM,
+          RelationshipGoal.CASUAL,
+          RelationshipGoal.FRIENDSHIP,
+          RelationshipGoal.NOT_SURE,
+        ],
+        distanceMode: 'global',
+      },
+    });
     await openLikesTab();
 
-    // The decision the whole change turns on, reversed. A new account has no
-    // likes, so the only points left to rank on are the twenty of stated fact,
-    // and the first card this account would have seen was an "11% match, not
-    // enough to go on" that taught anybody who read it that the percentage meant
-    // nothing. An empty deck that names the fix is the honest shape.
-    // Waited for rather than read directly: `openLikesTab` returns as soon as
-    // the subtitle settles, which is before the deck fetch resolves, and the
-    // store is empty-but-unlabelled in between.
     await waitFor(() =>
       expect(screen.getByText('Nothing to rank your matches on yet')).toBeTruthy()
     );
     expect(screen.queryByTestId(/^deck-card-/)).toBeNull();
-    // The strip is for a deck that exists. On an empty one the empty state says
-    // the same thing and links to the same place, twice over would be noise.
     expect(screen.queryByTestId('likes-building-up')).toBeNull();
-    // No questionnaire prompt either. What stands between a new account and
-    // cards is one photo like, and the empty state says so in those words.
     expect(screen.queryByText('What matters to you?')).toBeNull();
   });
 
-  it('opens the deck on the first like, with no questionnaire prompt anywhere', async () => {
+  it('keeps sub-80 profiles out of the deck after a single like', async () => {
     await registerAndRender();
     await completeCreation();
 
@@ -245,13 +253,13 @@ describe('account creation', () => {
     await openLikesTab();
 
     // The old failure mode was a questionnaire prompt where the cards should be.
-    // The deck now only carries cards at 80%+, and one like cannot earn that,
-    // so the right landing here is the *explained* empty deck. Either way,
-    // nothing else is allowed to stand between a person and their deck.
+    // One like is not enough to meet the 80% threshold, so it must not invent a
+    // profile score just to fill the deck.
     expect(screen.queryByText('What matters to you?')).toBeNull();
-    // Waited for rather than read directly: the grid arrives on the feed fetch
-    // after the tab settles, so reading a card straight away races it.
-    await waitFor(() => expect(screen.getByText('No strong matches yet')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('Nothing to rank your matches on yet')).toBeTruthy()
+    );
+    expect(screen.queryByTestId(/^deck-card-/)).toBeNull();
   });
 });
 
