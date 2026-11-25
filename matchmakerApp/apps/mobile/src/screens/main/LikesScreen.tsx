@@ -13,6 +13,7 @@ import {
   ErrorBanner,
   PersonTile,
   personTileGridStyle,
+  PhotoViewer,
 } from '@/components';
 import { useCurrentUser, useFeed } from '@/hooks';
 import { usePhotoFeedStore } from '@/stores/photoFeedStore';
@@ -57,6 +58,7 @@ export function LikesScreen() {
 
   // Who is being decided on, or null when the grid is just the grid.
   const [deciding, setDeciding] = useState<DeckCandidate | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<{ uri: string; title: string } | null>(null);
 
   // Top up the deck before the user runs out of people to decide on.
   useEffect(() => {
@@ -266,7 +268,7 @@ export function LikesScreen() {
         deciding for you.
       */}
       <Modal
-        visible={deciding !== null}
+        visible={deciding !== null && photoPreview === null}
         animationType="slide"
         onRequestClose={() => setDeciding(null)}
         presentationStyle="fullScreen"
@@ -297,6 +299,9 @@ export function LikesScreen() {
                   onLike={() => decide('like')}
                   onPass={() => decide('pass')}
                   onSuperLike={() => decide('super_like')}
+                  onOpenPhoto={(uri) =>
+                    setPhotoPreview({ uri, title: `${deciding.user.name}'s photo` })
+                  }
                   onOpenDetail={() =>
                     navigation.navigate('Profile', {
                       screen: 'ProfileDetail',
@@ -321,6 +326,13 @@ export function LikesScreen() {
           </View>
         ) : null}
       </Modal>
+
+      <PhotoViewer
+        uri={photoPreview?.uri ?? null}
+        title={photoPreview?.title}
+        onClose={() => setPhotoPreview(null)}
+        testID="likes-profile-photo-viewer"
+      />
     </ScreenContainer>
   );
 }

@@ -13,7 +13,7 @@ import {
 } from '@/components';
 import { useAuthActions, useCurrentUser } from '@/hooks';
 import { fetchVerificationStatus, getMissingProfileSections } from '@/services/profile';
-import { ageFromDateOfBirth } from '@/utils/mockData';
+import { ageFromDateOfBirth } from '@/utils/date';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { RootStackParamList, MainTabParamList } from '@/navigation/types';
 

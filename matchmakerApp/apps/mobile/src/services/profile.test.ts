@@ -1,4 +1,4 @@
-import { RelationshipGoal, SexualOrientation } from '@match-makers/shared';
+import { Gender, RelationshipGoal, SexualOrientation } from '@match-makers/shared';
 import { getMissingProfileSections, isProfileComplete } from './profile';
 import { generateDemoUser } from '@/utils/mockData';
 import type { User } from '@match-makers/shared';
@@ -82,7 +82,24 @@ describe('isProfileComplete', () => {
     expect(isProfileComplete(makeUser({ preferences: { distanceMode: 'global' } }))).toBe(true);
   });
 
-  it('is false when no genders are selected', () => {
+  it('accepts explicit Any gender and Any goal selections', () => {
+    const user = makeUser({
+      preferences: {
+        genders: [Gender.FEMALE, Gender.MALE, Gender.NON_BINARY, Gender.PREFER_NOT_TO_SAY],
+        relationshipGoals: [
+          RelationshipGoal.LONG_TERM,
+          RelationshipGoal.SHORT_TERM,
+          RelationshipGoal.CASUAL,
+          RelationshipGoal.FRIENDSHIP,
+          RelationshipGoal.NOT_SURE,
+        ],
+      },
+    });
+    expect(isProfileComplete(user)).toBe(true);
+    expect(getMissingProfileSections(user)).toEqual([]);
+  });
+
+  it('is false when discovery preferences are not selected yet', () => {
     expect(isProfileComplete(makeUser({ preferences: { genders: [] } }))).toBe(false);
   });
 });
@@ -109,7 +126,7 @@ describe('getMissingProfileSections', () => {
     expect(getMissingProfileSections(user)).toEqual([]);
   });
 
-  it('lists preferences only once when both preference lists are empty', () => {
+  it('lists preferences only once when both filters are unset', () => {
     const user = makeUser({
       preferences: { genders: [], relationshipGoals: [] },
     });

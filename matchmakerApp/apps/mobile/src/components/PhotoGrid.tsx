@@ -102,6 +102,7 @@ export function PhotoGrid({
   return (
     <FlatList<Post>
       ref={listRef}
+      key={columns}
       testID="photo-grid"
       data={ordered}
       keyExtractor={(post) => post.id}

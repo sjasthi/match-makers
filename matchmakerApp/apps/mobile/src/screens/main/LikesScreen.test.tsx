@@ -63,7 +63,7 @@ async function signInDemo() {
   const result = await adapter.login({ email: DEMO_EMAIL, password: DEMO_PASSWORD });
   // The adapter does not touch the store; the app's bootstrap does that. Without
   // this the screen waits on a viewer that never arrives.
-  useAuthStore.setState({ user: result.user, state: 'authenticated', authMode: 'mock' });
+  useAuthStore.setState({ user: result.user, state: 'authenticated' });
 }
 
 /**
@@ -112,6 +112,7 @@ async function makeStrongTaste() {
   }
 
   usePhotoFeedStore.getState().reset();
+  return targets;
 }
 
 beforeEach(async () => {
@@ -197,6 +198,38 @@ describe('an account with taste', () => {
     // thing the old stack got right.
     await waitFor(() => expect(screen.getByTestId('likes-decision')).toBeTruthy());
     expect(screen.getByTestId('swipe-like')).toBeTruthy();
+  });
+
+  it('opens the profile photo full screen and returns to the decision card', async () => {
+    const [target] = await makeStrongTaste();
+    const user = await mockDb.findUserById(target!.id);
+    expect(user).toBeTruthy();
+    await mockDb.saveUser({
+      ...user!,
+      photos: [
+        {
+          id: 'photo_preview_test',
+          url: 'https://example.com/profile-photo.jpg',
+          isPrimary: true,
+          order: 0,
+        },
+      ],
+    });
+
+    renderLikes();
+
+    const tiles = await waitFor(() => screen.getAllByTestId(/^deck-card-/));
+    fireEvent.press(screen.getByTestId(`deck-card-${target!.id}`));
+    await waitFor(() => expect(screen.getByTestId('likes-decision')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('swipe-card-open-photo'));
+    await waitFor(() =>
+      expect(screen.getByTestId('likes-profile-photo-viewer-image')).toBeTruthy()
+    );
+
+    fireEvent.press(screen.getByTestId('likes-profile-photo-viewer-close'));
+    await waitFor(() => expect(screen.getByTestId('likes-decision')).toBeTruthy());
+    expect(screen.getAllByTestId(/^deck-card-/)).toHaveLength(tiles.length);
   });
 
   it('likes the person who was tapped, and not whoever happens to be first', async () => {

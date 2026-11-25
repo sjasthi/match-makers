@@ -1,15 +1,10 @@
 import { create } from 'zustand';
 import type { Credentials, RegisterData, User } from '@match-makers/shared';
 import { AuthError } from '@/services/auth/AuthError';
-import {
-  bootstrapAuth,
-  getAuthAdapter,
-  getActiveAuthMode,
-  setActiveAuthMode,
-} from '@/services/auth';
+import { bootstrapAuth, getAuthAdapter } from '@/services/auth';
 import { onSessionExpired } from '@/services/api/client';
 import { isProfileComplete } from '@/services/profile';
-import type { AuthMode, SessionState } from '@/types';
+import type { SessionState } from '@/types';
 
 interface AuthStore {
   state: SessionState;
@@ -17,15 +12,12 @@ interface AuthStore {
   error: string | null;
   fieldErrors: Record<string, string> | undefined;
   isSubmitting: boolean;
-  authMode: AuthMode;
-
   bootstrap: () => Promise<void>;
   login: (credentials: Credentials) => Promise<void>;
   register: (data: RegisterData) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   setUser: (user: User) => void;
-  changeAuthMode: (mode: AuthMode) => Promise<void>;
   clearError: () => void;
 }
 
@@ -34,13 +26,12 @@ function resolveState(user: User | null): SessionState {
   return isProfileComplete(user) ? 'authenticated' : 'needs_onboarding';
 }
 
-export const useAuthStore = create<AuthStore>((set, get) => ({
+export const useAuthStore = create<AuthStore>((set) => ({
   state: 'unknown',
   user: null,
   error: null,
   fieldErrors: undefined,
   isSubmitting: false,
-  authMode: getActiveAuthMode(),
 
   bootstrap: async () => {
     try {
@@ -52,15 +43,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           error: 'Your session expired. Please sign in again.',
         });
       });
-      set({ authMode: getActiveAuthMode() });
-
       const adapter = getAuthAdapter();
       const user = await adapter.getCurrentUser().catch(() => null);
-      set({ user, state: resolveState(user), authMode: adapter.mode });
+      set({ user, state: resolveState(user) });
     } catch (error) {
-      // Must never strand the app on the splash screen. The auth mode switcher
-      // lives behind the navigator, so a bootstrap that never resolves leaves
-      // no way back to a working mode. Fall through to signed-out instead.
+      // Must never strand the app on the splash screen. Fall through to signed-out.
       set({ user: null, state: 'anonymous', error: AuthError.unknown(error).message });
     }
   },
@@ -111,12 +98,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   setUser: (user) => set({ user, state: resolveState(user) }),
-
-  changeAuthMode: async (mode) => {
-    await setActiveAuthMode(mode);
-    set({ authMode: mode, user: null, state: 'unknown', error: null });
-    await get().bootstrap();
-  },
 
   clearError: () => set({ error: null, fieldErrors: undefined }),
 }));

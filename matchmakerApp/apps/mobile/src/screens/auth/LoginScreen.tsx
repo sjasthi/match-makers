@@ -12,21 +12,18 @@ import {
   PrimaryButton,
   FormField,
   ErrorBanner,
-  AuthModeSwitcher,
 } from '@/components';
-import { useAuthActions, useAuthFormState, useAuthMode } from '@/hooks';
+import { useAuthActions, useAuthFormState } from '@/hooks';
 import { COLORS, FONT_SIZES, SPACING } from '@/constants';
-import { DEMO_EMAIL, DEMO_PASSWORD } from '@/utils/mockData';
 import type { AuthStackParamList } from '@/navigation/types';
 
 export function LoginScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<AuthStackParamList>>();
   const { login } = useAuthActions();
   const { isSubmitting, error, fieldErrors, clearError } = useAuthFormState();
-  const [authMode, changeAuthMode] = useAuthMode();
   const [showPassword, setShowPassword] = useState(false);
 
-  const { control, handleSubmit, setValue } = useForm<LoginInput>({
+  const { control, handleSubmit } = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
     mode: 'onBlur',
@@ -39,11 +36,6 @@ export function LoginScreen() {
       // The store already surfaced the message; the form keeps its values.
     }
   });
-
-  const fillDemo = () => {
-    setValue('email', DEMO_EMAIL, { shouldValidate: true });
-    setValue('password', DEMO_PASSWORD, { shouldValidate: true });
-  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -115,10 +107,6 @@ export function LoginScreen() {
               Sign in
             </PrimaryButton>
 
-            <Text style={styles.secondaryAction} onPress={fillDemo}>
-              Use the demo account ({DEMO_EMAIL})
-            </Text>
-
             <Text style={styles.switchPrompt}>
               No account yet?{' '}
               <Text
@@ -130,7 +118,6 @@ export function LoginScreen() {
               </Text>
             </Text>
 
-            <AuthModeSwitcher value={authMode} onChange={changeAuthMode} />
           </View>
         </ScreenContainer>
       </KeyboardAvoidingView>
@@ -169,11 +156,6 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: FONT_SIZES.sm,
     textAlign: 'right',
-  },
-  secondaryAction: {
-    color: COLORS.textSecondary,
-    fontSize: FONT_SIZES.sm,
-    textAlign: 'center',
   },
   switchPrompt: {
     textAlign: 'center',

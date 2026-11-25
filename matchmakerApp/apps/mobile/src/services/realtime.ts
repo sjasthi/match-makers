@@ -134,11 +134,9 @@ export const REALTIME_POLL_INTERVAL_MS = 5000;
  * Returns an unsubscribe function. The socket is shared, so the last
  * unsubscribe is what closes it.
  *
- * The caller decides whether to subscribe at all. Mock mode has no server to
- * talk to, so subscribing there would be a connection to nowhere -- the hook
- * that wraps this checks the mode first. Keeping the decision at the call site
- * is also what stops this module having to know about the auth layer, which it
- * would otherwise pull into a cycle with the adapter that disconnects it.
+ * The caller decides whether to subscribe. Keeping the decision at the call
+ * site stops this module knowing about the auth layer, which would otherwise
+ * pull it into a cycle with the adapter that disconnects it.
  */
 export function subscribeToUpdates(handler: Subscriber, matchId?: string): () => void {
   const subscription: Subscription = { matchId, handler };

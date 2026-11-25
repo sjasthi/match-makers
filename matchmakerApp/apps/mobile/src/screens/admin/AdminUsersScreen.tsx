@@ -4,7 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenContainer, LoadingState, EmptyState, ErrorBanner, ProfileImage } from '@/components';
 import { useAsync } from '@/hooks/useAsync';
-import { useAuthMode, useCurrentUser } from '@/hooks';
+import { useCurrentUser } from '@/hooks';
 import { listAllUsers, type AdminUserSummary } from '@/services/admin';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
 import type { ProfileStackParamList } from '@/navigation/types';
@@ -12,7 +12,7 @@ import type { ProfileStackParamList } from '@/navigation/types';
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'AdminUsers'>;
 
 /**
- * Every account in the mock database, one row each.
+ * Every account on the server, one row each.
  *
  * The feed and Matches screens are all scoped to whoever is signed in, so this
  * is the only place in the app that can show the whole population at once. That
@@ -20,17 +20,10 @@ type Nav = NativeStackNavigationProp<ProfileStackParamList, 'AdminUsers'>;
  */
 export function AdminUsersScreen() {
   const navigation = useNavigation<Nav>();
-  const [authMode] = useAuthMode();
   const currentUser = useCurrentUser();
-  // Both modes can list accounts now: mock reads the mock database, JWT asks
-  // `GET /admin/users`. Whether the request is *allowed* is the API's decision --
-  // it checks `users.is_admin` and answers 403, which surfaces in the error
-  // banner below. Gating here would only hide a fact the server is better placed
-  // to report, and would say "mock mode only" to somebody who is perfectly
-  // entitled.
   const { data, error, isLoading, refetch } = useAsync<AdminUserSummary[]>(
     () => listAllUsers(),
-    [authMode]
+    []
   );
 
   return (
@@ -62,7 +55,7 @@ export function AdminUsersScreen() {
             <EmptyState
               icon="👥"
               title="No accounts yet"
-              message="In mock mode the database reseeds itself on first launch -- if this is empty, reset it from Settings."
+              message="No accounts have been registered yet."
             />
           )
         }
@@ -117,7 +110,6 @@ function UserRow({
           {` · ${user.relationshipGoal.replace(/_/g, ' ')}`}
         </Text>
         <View style={styles.chips}>
-          {summary.isDemo ? <Chip label="DEMO" tone="primary" /> : null}
           {isCurrentUser ? <Chip label="YOU" tone="secondary" /> : null}
           {summary.isProfileComplete ? (
             <Chip label="PROFILE OK" tone="success" />

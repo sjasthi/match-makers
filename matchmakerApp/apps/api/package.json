@@ -8,7 +8,6 @@
     "start": "tsx src/server.ts",
     "migrate": "tsx db/migrate.ts",
     "admin": "tsx scripts/admin.ts",
-    "seed:demo": "tsx scripts/seed-demo.ts",
     "admin:backfill": "tsx scripts/backfill-affinity.ts",
     "rescore": "tsx scripts/rescore.ts",
     "perf": "tsx scripts/perf-check.ts",

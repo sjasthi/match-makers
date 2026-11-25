@@ -29,10 +29,8 @@ const SEED_CANDIDATE_COUNT = 20;
 /**
  * How many photos the seed library holds.
  *
- * Low on purpose. Every seeded post needs at least one tag to be useful and the
- * feed shows one at a time, so a large library would only make the first few
- * screens on a fresh install look identical. The admin importer is how you get
- * a real one.
+ * Compact fixture size for the Jest-only mock backend. The application uses
+ * the API and does not load this fixture.
  */
 const SEED_POST_COUNT = 24;
 
@@ -97,6 +95,13 @@ interface MockState {
    */
   posts: Post[];
   postReactions: PostReaction[];
+  /**
+   * Pairs that have reached the deck's entry score once, as two-element id
+   * pairs. The mock's mirror of `match_scores.revealed_at` on the API: the
+   * reveal is what keeps a shown card from flickering out of the deck when
+   * its score wobbles around the entry bar.
+   */
+  deckReveals: Array<[string, string]>;
   verificationSubmissions: VerificationSubmission[];
 }
 
@@ -128,14 +133,14 @@ function createInitialState(): MockState {
      * consumed. Its taste is exactly what the person at the screen creates.
      */
     postReactions: seedReactionsFor(candidates, posts),
+    deckReveals: [],
     verificationSubmissions: [],
   };
 }
 
 /**
- * In-memory database backed by AsyncStorage, standing in for the FP2
- * Postgres + Redis backend. Everything is seeded on first launch so the
- * prototype has content to show without a server.
+ * AsyncStorage-backed test fixture for the former offline prototype. App
+ * startup always uses the JWT API; this database is exercised by Jest only.
  */
 export class MockDatabase {
   private state: MockState | null = null;
@@ -253,6 +258,30 @@ export class MockDatabase {
     return state.matches.filter((match) => match.userIds.includes(userId));
   }
 
+  /**
+   * The pairs already revealed to this viewer's deck.
+   *
+   * Mirrors the stored `revealed_at` on the API's `match_scores`: the mock
+   * tracks which pairs crossed the entry score, the API also tracks when, and
+   * both feed the same hysteretic admission rule.
+   */
+  async revealedDeckPartners(userId: string): Promise<Set<string>> {
+    const state = await this.getState();
+    return new Set(
+      state.deckReveals
+        .filter((pair) => pair[0] === userId || pair[1] === userId)
+        .map((pair) => (pair[0] === userId ? pair[1] : pair[0]))
+    );
+  }
+
+  /** Records that a pair reached the deck's entry score. Idempotent. */
+  async revealDeckPair(a: string, b: string): Promise<void> {
+    const state = await this.getState();
+    if (state.deckReveals.some((pair) => pair.includes(a) && pair.includes(b))) return;
+    state.deckReveals.push([a, b]);
+    await this.persist();
+  }
+
   async addMessage(message: Omit<StoredMessage, 'id'>): Promise<StoredMessage> {
     const state = await this.getState();
     const record: StoredMessage = {
@@ -282,7 +311,7 @@ export class MockDatabase {
     await this.persist();
   }
 
-  /** Wipes the database and re-seeds. Backs the "reset mock data" dev action. */
+  /** Resets the in-memory test fixture to its initial state. */
   async reset(): Promise<void> {
     this.state = createInitialState();
     this.ready = Promise.resolve(this.state);

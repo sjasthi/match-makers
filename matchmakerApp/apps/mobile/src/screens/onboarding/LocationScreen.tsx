@@ -160,14 +160,13 @@ export function LocationScreen() {
       return;
     }
     if (preferences.genders.length === 0) {
-      setError('Pick at least one group to see.');
+      setError('Choose one or more genders, or select Any gender.');
       return;
     }
     if (preferences.relationshipGoals.length === 0) {
-      setError('Pick at least one relationship goal.');
+      setError('Choose one or more goals, or select Any goal.');
       return;
     }
-
     const { location } = resolveLocation();
 
     setSaving(true);
@@ -238,7 +237,7 @@ export function LocationScreen() {
         <DiscoveryPreferences
           preferences={preferences}
           onChange={setPreferences}
-          goalHelperText="Compared against everyone else's goal to produce a match score."
+          goalHelperText="Not sure is a distinct goal; select it or Any goal to include those profiles."
         />
 
         <PrimaryButton onPress={onSave} loading={saving} disabled={saving || locating} fullWidth>

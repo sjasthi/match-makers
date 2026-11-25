@@ -351,6 +351,17 @@ happened to call.
 - **Bands** 50 / 75 / 90, computed server-side. Aged evidence moves a pair across one:
   fresh evidence scored 66, and at 60 days the same pair was 42.
 
+**Current product decision:** The 30-day recency weighting described above was
+subsequently removed. Reactions are durable evidence: their timestamps no longer
+affect compatibility scores, and a tag's weight is its raw net approval scaled by
+how rare the tag is in the photo library, so a library dominated by one subject
+cannot make everyone look alike. The Likes deck is also hysteretic now: a pair
+enters at 80% and, once revealed (`match_scores.revealed_at`), stays until its
+score falls below 75, so scores wobbling around the entry bar cannot silently
+remove a card somebody was shown. After deploying a formula change, the stored
+`match_scores` must be fully rescored to replace values computed with the old
+weights.
+
 ### Real-time messaging did not exist
 It is now a WebSocket at `/ws` over Postgres `LISTEN`/`NOTIFY`, which needs no new
 infrastructure, and the payload is a pointer rather than the message so there is still
@@ -544,14 +555,23 @@ Success criteria
   polling fallback.
 
 [FP11] 11/18/2026
-### Handoff: connect your database to Match Makers.
-From the `matchmakerApp` folder:
-- **Connect PostgreSQL:** Copy `apps/api/.env.example` to `apps/api/.env`, set
-  `DATABASE_URL`, then run `npm run migrate --workspace=apps/api` and
-  `npm run dev --workspace=apps/api`. The migration creates the tables; it does not
-  import existing records.
-- **Import existing data:** Back it up, then map records into the tables in
-  `apps/api/db/schema.sql`, keeping IDs and relationships intact. Test with a separate
-  database first; there is no automatic data importer.
-- **Connect the app:** Set `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_AUTH_MODE=jwt` in
-  `apps/mobile/.env`. The app talks to the API, not directly to PostgreSQL.
+### Final handoff: quick start and project guide.
+The project is ready to hand off. `matchmakerApp/README.md` is the main
+developer- and AI-readable guide, covering the architecture, features, setup,
+tests, and known limitations.
+
+Quick start, from `matchmakerApp`:
+1. Use Node 20.12+ and have a PostgreSQL database available.
+2. Run `npm install`.
+3. Copy `apps/api/.env.example` to `apps/api/.env` and set `DATABASE_URL` and a
+   unique `AUTH_SECRET`.
+4. Copy `apps/mobile/.env.example` to `apps/mobile/.env`. Set
+   `EXPO_PUBLIC_API_URL` if the API is not reachable at its default address.
+5. Run `npm run migrate --workspace=apps/api`, then
+   `npm run dev --workspace=apps/api`. In another terminal, run `npm run dev`
+   to start the app.
+
+The database starts empty: the migration creates tables but does not import
+records. There is no automatic data importer; back up any existing data and test
+an import against a separate database first. See the README for admin setup,
+test commands, and further handoff notes.

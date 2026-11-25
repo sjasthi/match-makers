@@ -5,17 +5,16 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScreenContainer, LoadingState, EmptyState, ErrorBanner, TagInput } from '@/components';
 import { useAsync } from '@/hooks/useAsync';
-import { useAuthMode } from '@/hooks';
 import {
   AdminImportError,
   deletePost,
   listAllTags,
   listPosts,
   updatePostTags,
+  type AdminPostSummary,
 } from '@/services/admin';
 import { postColor, tagColor, tagGlyph, tagLabel } from '@/utils/interests';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
-import type { AdminPostSummary } from '@/services/mock/database';
 import type { ProfileStackParamList } from '@/navigation/types';
 
 type Nav = NativeStackNavigationProp<ProfileStackParamList, 'AdminPosts'>;
@@ -40,17 +39,12 @@ const THUMB = 72;
  */
 export function AdminPostsScreen() {
   const navigation = useNavigation<Nav>();
-  const [authMode] = useAuthMode();
-
   // The tag the library is narrowed to, or undefined for all of them.
   const [tag, setTag] = useState<string | undefined>();
 
-  // Same reasoning as the account list: both modes can read the library, and a
-  // caller without admin gets a 403 from the API rather than a misleading
-  // "mock mode only" panel from the client.
   const { data, error, isLoading, refetch } = useAsync<AdminPostSummary[]>(
     () => listPosts(tag),
-    [authMode, tag]
+    [tag]
   );
 
   // The filter strip. A failure here costs the filter, not the library, so it is
@@ -69,8 +63,7 @@ export function AdminPostsScreen() {
         ListHeaderComponent={
           <View style={styles.header}>
             <Text variant="bodySmall" style={styles.hint}>
-              Site-owned content. Every photo here belongs to the app, not to a profile. Resetting
-              mock data in Settings clears it.
+              Site-owned content. Every photo here belongs to the app, not to a profile.
             </Text>
             {error ? <ErrorBanner message={error} onDismiss={refetch} /> : null}
             {knownTags && knownTags.length > 0 ? (
@@ -99,7 +92,7 @@ export function AdminPostsScreen() {
             <EmptyState
               icon="🖼️"
               title="The library is empty"
-              message="The seed ships placeholder tiles. Import real photos to see how the feed is meant to look."
+              message="No photos have been added to the library yet."
               actionLabel="Import photos"
               onAction={() => navigation.navigate('AdminPostImport')}
             />

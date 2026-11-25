@@ -1,71 +1,20 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { HALF_LIFE_SECONDS, decayFactor, effectiveWeight } from './affinity';
+import { TAG_STRENGTH_SQL } from './affinity';
 import { bandFor, describeAffinity } from './matching';
 
-describe('decayFactor', () => {
-  test('is 1 for something that just happened', () => {
-    assert.equal(decayFactor(0), 1);
-  });
-
-  test('is a half after one half-life', () => {
-    assert.ok(Math.abs(decayFactor(HALF_LIFE_SECONDS) - 0.5) < 1e-9);
-  });
-
-  test('is a quarter after two', () => {
-    assert.ok(Math.abs(decayFactor(HALF_LIFE_SECONDS * 2) - 0.25) < 1e-9);
-  });
-
-  test('falls off with age, never below zero', () => {
-    assert.ok(decayFactor(HALF_LIFE_SECONDS * 10) < 0.01);
-    assert.ok(decayFactor(HALF_LIFE_SECONDS * 100) >= 0);
-  });
-});
-
-describe('effectiveWeight', () => {
-  const now = new Date('2026-01-01T00:00:00.000Z');
-
-  test('is the net approval, full weight when fresh', () => {
-    const weight = effectiveWeight({
-      likes: 3,
-      dislikes: 0,
-      lastActivityAt: now,
-      now,
-    });
-    assert.equal(weight, 3);
-  });
-
-  test('is negative for a tag somebody has pushed away', () => {
-    const weight = effectiveWeight({
-      likes: 1,
-      dislikes: 4,
-      lastActivityAt: now,
-      now,
-    });
-    assert.equal(weight, -3);
-  });
-
-  test('decays with age', () => {
-    const stale = effectiveWeight({
-      likes: 3,
-      dislikes: 0,
-      lastActivityAt: new Date(now.getTime() - HALF_LIFE_SECONDS * 1000),
-      now,
-    });
-    const fresh = effectiveWeight({ likes: 3, dislikes: 0, lastActivityAt: now, now });
-
-    assert.ok(stale < fresh);
-    assert.ok(stale >= 0);
-  });
-
-  test('does not decay a negative opinion into a positive one', () => {
-    const weight = effectiveWeight({
-      likes: 0,
-      dislikes: 2,
-      lastActivityAt: new Date(now.getTime() - HALF_LIFE_SECONDS * 1000),
-      now,
-    });
-    assert.ok(weight <= 0);
+describe('tag strength', () => {
+  test('is net approval scaled by library rarity, not by elapsed time', () => {
+    assert.match(TAG_STRENGTH_SQL, /a\.likes - a\.dislikes/);
+    assert.match(TAG_STRENGTH_SQL, /ln\(1 \+ l\.p::float8 \/ d\.docs\)/);
+    /*
+     * The Laplace denominator is gone on purpose: cosine bounds the pair
+     * result by itself, so the +1 only flattened the honest gap between a
+     * tag liked once and a tag liked six times. If it ever comes back, this
+     * is the line that should fail first.
+     */
+    assert.doesNotMatch(TAG_STRENGTH_SQL, /dislikes\) \+ 1\)/);
+    assert.doesNotMatch(TAG_STRENGTH_SQL, /last_activity_at|now\(\)|exp\(/i);
   });
 });
 

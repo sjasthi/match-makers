@@ -49,7 +49,7 @@ function renderAdmin() {
 }
 
 beforeEach(async () => {
-  useAuthStore.setState({ state: 'unknown', user: null, error: null, authMode: 'mock' });
+  useAuthStore.setState({ state: 'unknown', user: null, error: null });
   await mockDb.reset();
 });
 
@@ -86,7 +86,7 @@ describe('AdminUsersScreen', () => {
     expect(screen.getByText('PROFILE INCOMPLETE')).toBeTruthy();
   });
 
-  it('marks the demo account and the signed-in account', async () => {
+  it('marks the signed-in account without special-casing a demo account', async () => {
     const adapter = new MockAuthAdapter();
     await adapter.login({ email: DEMO_EMAIL, password: DEMO_PASSWORD });
     useAuthStore.setState({ state: 'authenticated', user: await adapter.getCurrentUser() });
@@ -94,7 +94,7 @@ describe('AdminUsersScreen', () => {
     renderAdmin();
 
     await waitFor(() => expect(screen.getByText('21 ACCOUNTS')).toBeTruthy());
-    expect(screen.getByText('DEMO')).toBeTruthy();
+    expect(screen.queryByText('DEMO')).toBeNull();
     expect(screen.getByText('YOU')).toBeTruthy();
   });
 
@@ -129,7 +129,7 @@ describe('AdminUsersScreen', () => {
    * like success, so the assertion is that the list is not on screen.
    */
   it('asks the API in jwt mode rather than falling back to seeded accounts', async () => {
-    useAuthStore.setState({ authMode: 'jwt' });
+    await setActiveAuthMode('jwt');
 
     renderAdmin();
 

@@ -75,7 +75,7 @@ export function eligibilitySql(options: { excludeSwiped?: boolean } = {}): strin
 
       /* --- the caller's own filters --- */
       AND (cardinality(v.wants_genders) = 0 OR c.gender = ANY (v.wants_genders))
-      AND (cardinality(v.wants_goals)   = 0 OR c.relationship_goal = ANY (v.wants_goals))
+      AND (cardinality(v.wants_goals) = 0 OR c.relationship_goal = ANY (v.wants_goals))
       AND (v.age_min IS NULL OR extract(year FROM age(c.date_of_birth)) BETWEEN v.age_min AND v.age_max)
       AND (
         v.distance_mode = 'global' OR v.max_distance IS NULL

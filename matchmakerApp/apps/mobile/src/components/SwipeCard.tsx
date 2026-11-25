@@ -12,7 +12,7 @@ import { IconButton, Surface, Chip } from 'react-native-paper';
 import { ProfileImage } from './ProfileImage';
 import type { User } from '@match-makers/shared';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
-import { ageFromDateOfBirth } from '@/utils/mockData';
+import { ageFromDateOfBirth } from '@/utils/date';
 import {
   compatibilityLabel,
   scoreCompatibility,
@@ -31,6 +31,7 @@ interface Props {
   onPass: () => void;
   onSuperLike: () => void;
   onOpenDetail?: () => void;
+  onOpenPhoto?: (uri: string) => void;
   enabled?: boolean;
   /**
    * The score the deck was ordered by. Supplied by the feed, because only the
@@ -76,12 +77,14 @@ export const SwipeCard = memo(function SwipeCard({
   onPass,
   onSuperLike,
   onOpenDetail,
+  onOpenPhoto,
   enabled = true,
   compatibility: scored,
   band,
 }: Props) {
   const position = useRef(new Animated.ValueXY()).current;
   const compatibility = scored ?? scoreCompatibility(viewer, user);
+  const photoUri = user.photos.find((photo) => photo.isPrimary)?.url ?? user.photos[0]?.url;
 
   const resetPosition = useCallback(() => {
     Animated.spring(position, {
@@ -160,7 +163,7 @@ export const SwipeCard = memo(function SwipeCard({
       <Surface style={styles.surface} elevation={3}>
         <ProfileImage
           user={user}
-          url={user.photos.find((photo) => photo.isPrimary)?.url ?? user.photos[0]?.url}
+          url={photoUri}
           initialsScale={0.32}
         />
 
@@ -241,6 +244,18 @@ export const SwipeCard = memo(function SwipeCard({
             </View>
           </View>
         </LinearGradient>
+
+        {onOpenPhoto && photoUri ? (
+          <IconButton
+            icon="fullscreen"
+            size={20}
+            iconColor={COLORS.background}
+            style={styles.photoButton}
+            onPress={() => onOpenPhoto(photoUri)}
+            accessibilityLabel={`View ${user.name}'s photo full screen`}
+            testID="swipe-card-open-photo"
+          />
+        ) : null}
 
         {onOpenDetail ? (
           <IconButton
@@ -358,6 +373,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: SPACING.sm,
     right: SPACING.sm,
+    margin: 0,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  photoButton: {
+    position: 'absolute',
+    top: SPACING.sm,
+    left: SPACING.sm,
     margin: 0,
     backgroundColor: 'rgba(0,0,0,0.35)',
   },

@@ -106,3 +106,34 @@ export function compatibilityLabel(score: number | null): string {
   if (score > 0) return 'Little in common yet';
   return 'Not enough to go on';
 }
+
+/**
+ * The score a pair needs to enter the Likes deck.
+ *
+ * Mirrors `DECK_ENTER_SCORE` on the API (`apps/api/src/matching.ts`): the two
+ * must stay in step because this file is the client half of one admission
+ * rule, and a mock that filters at a different bar than the server would make
+ * the Jest expectations lie about the real deck.
+ */
+export const DECK_ENTER_SCORE = 80;
+
+/**
+ * The floor a revealed pair stays above, mirroring `DECK_EXIT_SCORE` on the
+ * API. Hysteresis: a pair already shown in somebody's deck does not flicker
+ * out because its score wobbles around the entry bar; it leaves when the fall
+ * is real.
+ */
+export const DECK_EXIT_SCORE = 75;
+
+/**
+ * Whether a pair belongs in the deck, given its score and reveal state.
+ *
+ * The mock's restatement of the feed query's rule. The reveal is a boolean
+ * here because the mock tracks *which* pairs crossed the entry bar; the API
+ * also stores *when*, in `match_scores.revealed_at`.
+ */
+export function admitsToDeck(score: number | null, revealed: boolean): boolean {
+  if (score === null) return false;
+  if (score >= DECK_ENTER_SCORE) return true;
+  return revealed && score >= DECK_EXIT_SCORE;
+}

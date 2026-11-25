@@ -116,7 +116,7 @@ export function IntentScreen() {
           onToggle={(value) => setGoal(value)}
           multiple={false}
           error={!goal}
-          helperText="One answer. We compare it directly against everyone else's."
+          helperText="Not sure is a distinct goal, not the same as Any."
         />
 
         <PrimaryButton onPress={onSave} loading={saving} disabled={saving} fullWidth>

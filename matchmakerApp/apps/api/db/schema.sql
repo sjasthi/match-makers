@@ -344,21 +344,9 @@ CREATE TABLE IF NOT EXISTS post_images (
 -- every read: correct, but un-persisted, un-indexed, and invisible to the
 -- server, which therefore ordered the deck by registration date.
 --
--- `likes` and `dislikes` are raw counts, deliberately. The decayed weight --
--- what a like is worth given how long ago it happened -- is computed when the
--- vector is read, from `last_activity_at`:
---
---     effective = (likes - dislikes) * exp(-age * ln(2) / half_life)
---
--- The `ln(2)` is what makes it a half-life rather than an e-folding. Without
--- it the weight would be 1/e -- about 37% -- at the stated half-life, so the
--- decay would be a good deal weaker than the number says.
---
--- Read-time decay rather than a write-time moving average, on purpose. A
--- write-time EWMA drifts: the stored value is only correct the instant it is
--- written and disagrees with what should be shown a day later. Read-time decay
--- is deterministic, needs no background job to age rows out, and a test can fix
--- a timestamp and assert the number.
+-- `likes` and `dislikes` are raw counts, deliberately. The score uses net
+-- reaction counts and does not decay them over time. `last_activity_at` is kept
+-- as activity metadata only; it does not affect the score.
 --
 -- Tags are the canonical folded form already stored on `posts.tags`, so there
 -- is one row for `dog` and not two for `Dogs` and `dog`.
@@ -371,8 +359,8 @@ CREATE TABLE IF NOT EXISTS user_tag_affinity (
   PRIMARY KEY (user_id, tag)
 );
 
--- The composite index the ranking walks: everyone leaning towards a tag,
--- freshest first. The primary key already covers "one person's whole vector".
+-- The tag-leading index the ranking walks: everyone leaning towards a tag.
+-- The primary key already covers "one person's whole vector".
 CREATE INDEX IF NOT EXISTS user_tag_affinity_tag_idx
   ON user_tag_affinity (tag, last_activity_at DESC);
 
@@ -403,6 +391,13 @@ CREATE TABLE IF NOT EXISTS match_scores (
   co_liked_count integer NOT NULL DEFAULT 0,
   shared_tags    text[] NOT NULL DEFAULT '{}',
   band           text NOT NULL DEFAULT 'below-50',
+  -- Hysteresis for the Likes deck. NULL until the pair first reaches the
+  -- deck's entry score, then set once and never cleared: a revealed pair
+  -- stays in the deck until its score falls below the exit floor, so a
+  -- percentage wobbling around the entry bar cannot silently remove a card
+  -- somebody was already shown. Both directions of a pair carry the same
+  -- value, because the reveal belongs to the pair rather than to one side.
+  revealed_at    timestamptz,
   computed_at    timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (viewer_id, candidate_id)
 );
@@ -411,6 +406,13 @@ CREATE TABLE IF NOT EXISTS match_scores (
 -- what turns that read into a range scan rather than a sort of every row.
 CREATE INDEX IF NOT EXISTS match_scores_ranking_idx
   ON match_scores (viewer_id, score DESC, candidate_id);
+
+-- `revealed_at` arrived after the table did, so a database created before it
+-- exists needs the ALTER -- the same treatment as `users.is_admin` above. A
+-- fresh database gets the column from the CREATE TABLE and the ALTER is a
+-- no-op.
+ALTER TABLE match_scores
+  ADD COLUMN IF NOT EXISTS revealed_at timestamptz;
 
 -- ---------------------------------------------------------------------------
 -- user_taste_summary

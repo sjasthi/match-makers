@@ -13,10 +13,12 @@ import type { Photo, VerificationStatus } from '@match-makers/shared';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { currentUserId, requireAuth } from '@/auth';
+import { eligibilitySql } from '@/eligibility';
 import { pool, withTransaction } from '@/db';
 import { getUserById } from '@/db/users';
 import { ApiError } from '@/errors';
 import { asyncHandler, parse, send } from '@/http';
+import { rescoreForViewer } from '@/matching';
 
 export const profileRouter = Router();
 
@@ -68,8 +70,21 @@ profileRouter.patch(
   asyncHandler(async (req, res) => {
     const userId = currentUserId(req);
     const patch = parse(patchProfileSchema, req.body);
+    const eligibilityChanged =
+      patch.dateOfBirth !== undefined ||
+      patch.gender !== undefined ||
+      patch.sexualOrientation !== undefined ||
+      patch.relationshipGoal !== undefined ||
+      patch.location !== undefined ||
+      patch.preferences !== undefined;
 
     await withTransaction(async (client) => {
+      if (eligibilityChanged) {
+        // Serialize against reaction writes, which also rescore this user's
+        // pair matrix. Otherwise a concurrent rescore could commit stale gates.
+        await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
+      }
+
       const userSets: string[] = [];
       const userValues: unknown[] = [];
 
@@ -112,6 +127,10 @@ profileRouter.patch(
 
       if (patch.photos !== undefined) {
         await replacePhotos(client, userId, patch.photos);
+      }
+
+      if (eligibilityChanged) {
+        await rescoreForViewer(client, userId, eligibilitySql({ excludeSwiped: false }));
       }
     });
 

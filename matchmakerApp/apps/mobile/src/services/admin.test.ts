@@ -38,14 +38,11 @@ describe('admin service', () => {
     }
   });
 
-  it('flags the demo account and leaves candidates unflagged', async () => {
+  it('does not add demo-specific metadata to accounts', async () => {
     await seedAndSignIn();
 
     const users = await listAllUsers();
-    const demos = users.filter((summary) => summary.isDemo);
-
-    expect(demos).toHaveLength(1);
-    expect(demos[0]?.user.email).toBe(DEMO_EMAIL);
+    expect(users.every((summary) => !('isDemo' in summary))).toBe(true);
   });
 
   it('sorts newest first', async () => {

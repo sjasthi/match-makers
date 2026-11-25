@@ -1,7 +1,13 @@
-import { Gender, type DistanceMode, type Location, type User, SexualOrientation, orientationAllows } from '@match-makers/shared';
+import {
+  Gender,
+  orientationAllows,
+  type DistanceMode,
+  type Location,
+  type User,
+} from '@match-makers/shared';
 
 import { distanceKm, hasCoordinates } from '@/utils/distance';
-import { ageFromDateOfBirth } from '@/utils/mockData';
+import { ageFromDateOfBirth } from '@/utils/date';
 
 /**
  * Why a pair failed a requirement, as a code rather than a sentence.
@@ -114,19 +120,17 @@ export function checkEligibility(seeker: User, target: User): EligibilityResult 
   // of absence are not the same. Distance is a hard geographic fact you cannot
   // check at all, whereas an unstated gender is a range of possibilities that
   // very often includes what you asked for.
-  if (target.gender !== Gender.PREFER_NOT_TO_SAY && !genders.includes(target.gender)) {
+  if (
+    target.gender !== Gender.PREFER_NOT_TO_SAY &&
+    genders.length > 0 &&
+    !genders.includes(target.gender)
+  ) {
     failures.push('gender');
   }
 
-  // Relationship goal was collected, validated, displayed and stored for three
-  // releases without ever being compared to anything. It is a preference now, and
-  // preferences are gates: a pair whose stated directions differ is not fixed by
-  // liking the same photos, so this refuses rather than scores.
-  //
-  // An empty list means "no stated preference", not "everyone is acceptable".
-  // Treating an unanswered question as a wildcard would let an account that never
-  // picked a goal into everybody's deck, which is the opposite of what picking one
-  // is for.
+  // A goal is an explicit filter value, including "not sure". The UI stores
+  // "Any goal" as the full enum set; empty lists are only unconfigured legacy
+  // data and remain unrestricted here.
   if (relationshipGoals.length > 0 && !relationshipGoals.includes(target.relationshipGoal)) {
     failures.push('goal');
   }

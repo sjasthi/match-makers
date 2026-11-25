@@ -5,7 +5,6 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Text } from 'react-native-paper';
 import { ScreenContainer, Avatar, EmptyState, LoadingState, ErrorBanner } from '@/components';
 import { useMatches } from '@/hooks';
-import { getAuthAdapter } from '@/services/auth';
 import type { MatchSummary } from '@/services/matches';
 import { REALTIME_POLL_INTERVAL_MS } from '@/services/realtime';
 import { useRealtimeUpdates } from '@/hooks/useRealtime';
@@ -33,8 +32,6 @@ export function MatchesScreen() {
   useFocusEffect(
     useCallback(() => {
       void load({ refresh: true });
-      if (getAuthAdapter().mode === 'mock') return undefined;
-
       const timer = setInterval(() => {
         if (realtimeStatusRef.current !== 'open') void load({ refresh: true });
       }, REALTIME_POLL_INTERVAL_MS);

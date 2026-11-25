@@ -4,14 +4,13 @@ import { useAuthStore } from '@/stores/authStore';
 import { useFeedStore, useMatchesStore } from '@/stores/feedStore';
 import { usePhotoFeedStore } from '@/stores/photoFeedStore';
 import type { User } from '@match-makers/shared';
-import type { AuthMode, SwipeType } from '@/types';
+import type { SwipeType } from '@/types';
 import { APP_CONFIG } from '@/constants';
 
 export function useSession() {
   const state = useAuthStore((store) => store.state);
   const user = useAuthStore((store) => store.user);
-  const authMode = useAuthStore((store) => store.authMode);
-  return { state, user, authMode };
+  return { state, user };
 }
 
 export function useCurrentUser(): User | null {
@@ -22,9 +21,8 @@ export function useAuthActions() {
   const login = useAuthStore((store) => store.login);
   const register = useAuthStore((store) => store.register);
   const logout = useAuthStore((store) => store.logout);
-  const changeAuthMode = useAuthStore((store) => store.changeAuthMode);
   const refreshUser = useAuthStore((store) => store.refreshUser);
-  return { login, register, logout, changeAuthMode, refreshUser };
+  return { login, register, logout, refreshUser };
 }
 
 export function useAuthFormState() {
@@ -33,12 +31,6 @@ export function useAuthFormState() {
   const fieldErrors = useAuthStore((store) => store.fieldErrors);
   const clearError = useAuthStore((store) => store.clearError);
   return { isSubmitting, error, fieldErrors, clearError };
-}
-
-export function useAuthMode(): [AuthMode, (mode: AuthMode) => Promise<void>] {
-  const authMode = useAuthStore((store) => store.authMode);
-  const changeAuthMode = useAuthStore((store) => store.changeAuthMode);
-  return [authMode, changeAuthMode];
 }
 
 export function useFeed() {

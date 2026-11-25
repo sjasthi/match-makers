@@ -223,6 +223,7 @@ describe('normaliseState (photo feed collections)', () => {
       swipes: [],
       matches: [],
       messages: [],
+      deckReveals: [],
       verificationSubmissions: [],
       ...overrides,
     };
@@ -241,6 +242,13 @@ describe('normaliseState (photo feed collections)', () => {
     expect((state as { posts: unknown[] }).posts).toEqual([]);
     expect((state as { postReactions: unknown[] }).postReactions).toEqual([]);
     expect((state as { verificationSubmissions: unknown[] }).verificationSubmissions).toEqual([]);
+  });
+
+  it('defaults the deck reveal list a pre-hysteresis database never had', () => {
+    const { state, changed } = normaliseState(baseState({ deckReveals: undefined }));
+
+    expect(changed).toBe(true);
+    expect((state as { deckReveals: unknown[] }).deckReveals).toEqual([]);
   });
 
   it('keeps the accounts rather than triggering a reseed', () => {

@@ -51,7 +51,11 @@ export const PHOTOS_FOR_FULL_TASTE = 10;
 
 export interface TagOpinion {
   tag: string;
-  /** Net approval in (-1, 1): positive towards, negative against. */
+  /**
+   * Net approval in (-1, 1), for display: the meters on the taste profile and
+   * the optimistic strip read this. The *matching* weight is derived
+   * separately -- see `matchWeight` for why the two are not the same number.
+   */
   score: number;
   likes: number;
   dislikes: number;
@@ -90,6 +94,10 @@ export interface TasteIndex {
   opinionByUser: Map<string, Map<string, TagOpinion>>;
   /** postId -> its tags, so a co-like can name what was co-liked. */
   tagsByPost: Map<string, string[]>;
+  /** tag -> how many posts carry it, for the rarity weighting. */
+  docsByTag: Map<string, number>;
+  /** How many posts the library holds, for the rarity weighting. */
+  totalPosts: number;
 }
 
 /**
@@ -110,7 +118,13 @@ export function buildTasteIndex(
   posts: Pick<Post, 'id' | 'tags'>[]
 ): TasteIndex {
   const tagsByPost = new Map<string, string[]>();
-  for (const post of posts) tagsByPost.set(post.id, post.tags);
+  const docsByTag = new Map<string, number>();
+  for (const post of posts) {
+    tagsByPost.set(post.id, post.tags);
+    for (const tag of post.tags) {
+      docsByTag.set(tag, (docsByTag.get(tag) ?? 0) + 1);
+    }
+  }
 
   const likedByUser = new Map<string, Set<string>>();
   const likeCountByUser = new Map<string, number>();
@@ -138,7 +152,14 @@ export function buildTasteIndex(
     opinionByUser.set(reaction.userId, opinions);
   }
 
-  return { likedByUser, likeCountByUser, opinionByUser, tagsByPost };
+  return {
+    likedByUser,
+    likeCountByUser,
+    opinionByUser,
+    tagsByPost,
+    docsByTag,
+    totalPosts: posts.length,
+  };
 }
 
 export const EMPTY_TASTE_INDEX: TasteIndex = {
@@ -146,6 +167,8 @@ export const EMPTY_TASTE_INDEX: TasteIndex = {
   likeCountByUser: new Map(),
   opinionByUser: new Map(),
   tagsByPost: new Map(),
+  docsByTag: new Map(),
+  totalPosts: 0,
 };
 
 /** Photo likes before a pair's signal counts at full strength. */
@@ -164,6 +187,32 @@ function confidenceBetween(index: TasteIndex, a: string, b: string): number {
  */
 function coLikeOverlap(n: number): number {
   return n / (n + CO_LIKE_SATURATION);
+}
+
+/**
+ * The matching weight of one opinion: raw net approval scaled by how rare the
+ * tag is in the post library.
+ *
+ * The mirror of `TAG_STRENGTH_SQL` on the API, because a deck ordered by one
+ * measure and explained by another is a lie with two authors. Raw net counts:
+ * an earlier version divided by `(net + 1)` so a small count would not read as
+ * certainty, but cosine bounds the pair result by itself, so the division only
+ * flattened the honest gap between a tag liked once and a tag liked six times.
+ *
+ * The rarity multiplier is the scale answer. Without it, a library dominated
+ * by one subject makes everybody's vector dominated by that subject, and the
+ * "similarity" would measure the library's composition rather than the pair's
+ * taste. A tag few photos carry is stronger evidence than a tag the library is
+ * full of -- and the multiplier is a property of the tag, so symmetry holds.
+ */
+function matchWeight(index: TasteIndex, tag: string, opinion: TagOpinion): number {
+  const net = opinion.likes - opinion.dislikes;
+  if (net <= 0) return 0;
+  const docs = index.docsByTag.get(tag);
+  // A tag the library no longer carries can produce no future co-likes. The
+  // server's inner join drops it, and so does this.
+  if (docs === undefined) return 0;
+  return net * Math.log(1 + index.totalPosts / docs);
 }
 
 /**
@@ -191,6 +240,7 @@ function coLikeOverlap(n: number): number {
  * saturation.
  */
 function tagOverlap(
+  index: TasteIndex,
   mine: Map<string, TagOpinion>,
   theirs: Map<string, TagOpinion>
 ): { ratio: number; shared: string[] } {
@@ -199,20 +249,25 @@ function tagOverlap(
   let theirsNorm = 0;
   const shared: string[] = [];
 
-  for (const opinion of mine.values()) {
-    if (opinion.score > 0) mineNorm += opinion.score * opinion.score;
+  for (const [tag, opinion] of mine) {
+    const weight = matchWeight(index, tag, opinion);
+    if (weight > 0) mineNorm += weight * weight;
   }
-  for (const opinion of theirs.values()) {
-    if (opinion.score > 0) theirsNorm += opinion.score * opinion.score;
+  for (const [tag, opinion] of theirs) {
+    const weight = matchWeight(index, tag, opinion);
+    if (weight > 0) theirsNorm += weight * weight;
   }
 
   for (const [tag, myOpinion] of mine) {
-    if (myOpinion.score <= 0) continue;
+    const myWeight = matchWeight(index, tag, myOpinion);
+    if (myWeight <= 0) continue;
     const theirOpinion = theirs.get(tag);
-    if (!theirOpinion || theirOpinion.score <= 0) continue;
+    if (!theirOpinion) continue;
+    const theirWeight = matchWeight(index, tag, theirOpinion);
+    if (theirWeight <= 0) continue;
 
     shared.push(tag);
-    earned += myOpinion.score * theirOpinion.score;
+    earned += myWeight * theirWeight;
   }
 
   if (shared.length === 0 || mineNorm === 0 || theirsNorm === 0) {
@@ -240,7 +295,8 @@ export function tasteBetween(index: TasteIndex, a: string, b: string): TasteSign
 
   const coLikedPosts = likedByA && likedByB ? countIntersection(likedByA, likedByB) : 0;
 
-  const tags = opinionA && opinionB ? tagOverlap(opinionA, opinionB) : { ratio: 0, shared: [] };
+  const tags =
+    opinionA && opinionB ? tagOverlap(index, opinionA, opinionB) : { ratio: 0, shared: [] };
 
   // Nothing shared means nothing to say, so the whole thing collapses to zero
   // rather than to `confidence * 0`.

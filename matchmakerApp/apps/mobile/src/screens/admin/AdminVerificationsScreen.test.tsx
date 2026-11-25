@@ -9,7 +9,7 @@ import { DEMO_EMAIL, DEMO_PASSWORD } from '@/utils/mockData';
 const DEMO_IMAGE = 'data:image/jpeg;base64,ZmFrZS1waG90bw==';
 
 beforeEach(async () => {
-  useAuthStore.setState({ state: 'unknown', user: null, error: null, authMode: 'mock' });
+  useAuthStore.setState({ state: 'unknown', user: null, error: null });
   await setActiveAuthMode('mock');
   await mockDb.reset();
 });

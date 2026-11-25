@@ -114,9 +114,30 @@ describe('preferencesSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('requires at least one gender', () => {
-    const result = preferencesSchema.safeParse({ ...base, genders: [] });
+  it('requires an explicit Any or specific choice for each filter', () => {
+    const result = preferencesSchema.safeParse({
+      ...base,
+      genders: [],
+      relationshipGoals: [],
+    });
     expect(result.success).toBe(false);
+  });
+
+  it('accepts Any encoded as the full set of options', () => {
+    const result = preferencesSchema.safeParse({
+      ...base,
+      genders: Object.values(Gender),
+      relationshipGoals: Object.values(RelationshipGoal),
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts not sure as an explicit discovery goal', () => {
+    const result = preferencesSchema.safeParse({
+      ...base,
+      relationshipGoals: [RelationshipGoal.NOT_SURE],
+    });
+    expect(result.success).toBe(true);
   });
 });
 

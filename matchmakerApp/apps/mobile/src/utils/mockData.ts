@@ -332,16 +332,7 @@ export function generateMockUsers(count: number, seed = 42): Array<User & { pass
   return Array.from({ length: count }, (_, index) => generateMockUser(index + 1, seed));
 }
 
-export function ageFromDateOfBirth(dateOfBirth: string): number {
-  const dob = new Date(dateOfBirth);
-  const now = new Date();
-  let age = now.getFullYear() - dob.getFullYear();
-  const monthDelta = now.getMonth() - dob.getMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < dob.getDate())) {
-    age -= 1;
-  }
-  return age;
-}
+export { ageFromDateOfBirth } from './date';
 
 /* -------------------------------------------------------------------------- */
 /* Photo feed seed (FP4)                                                       */

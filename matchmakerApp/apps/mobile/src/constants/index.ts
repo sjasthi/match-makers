@@ -1,7 +1,6 @@
 export const AUTH_STORAGE_KEYS = {
   ACCESS_TOKEN: 'auth.access_token',
   REFRESH_TOKEN: 'auth.refresh_token',
-  AUTH_MODE: 'auth.mode',
 } as const;
 
 function readNumberEnv(value: string | undefined, fallback: number): number {
@@ -19,7 +18,7 @@ export const MOCK_CONFIG = {
 } as const;
 
 export const API_CONFIG = {
-  BASE_URL: process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api',
+  BASE_URL: process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001',
   TIMEOUT: 30000,
 } as const;
 

@@ -1,5 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AUTH_STORAGE_KEYS } from '@/constants';
 import { setAuthTransport } from '@/services/api/client';
 import type { AuthMode } from './AuthAdapter';
 import { JWTAuthAdapter } from './JWTAuthAdapter';
@@ -14,26 +12,20 @@ function createAdapter(mode: AuthMode) {
   }
 }
 
-/**
- * Recognises a persisted mode.
- *
- * Anything unrecognised -- including the removed `session` -- is ignored, which
- * is what makes the switcher self-healing. An account left in `session` by an
- * older build would otherwise keep overriding the environment and failing to
- * log in, with nothing on screen to say why.
- */
 function isAuthMode(value: unknown): value is AuthMode {
   return value === 'mock' || value === 'jwt';
 }
 
-function readEnvMode(): AuthMode {
+function readInitialMode(): AuthMode {
+  // The app always uses JWT. Mock mode is selected only by Jest's setup so the
+  // existing unit/screen tests can exercise their local test backend.
+  if (process.env.NODE_ENV !== 'test') return 'jwt';
   const fromEnv = process.env.EXPO_PUBLIC_AUTH_MODE;
   return isAuthMode(fromEnv) ? fromEnv : 'mock';
 }
 
-let activeMode: AuthMode = readEnvMode();
+let activeMode: AuthMode = readInitialMode();
 let activeAdapter = createAdapter(activeMode);
-let storageHydrated = false;
 
 export function getAuthAdapter() {
   return activeAdapter;
@@ -43,30 +35,21 @@ export function getActiveAuthMode(): AuthMode {
   return activeMode;
 }
 
-/** Switches auth strategy at runtime and re-points the API client at it. */
+/** Test-only adapter switch. The application UI always uses JWT. */
 export async function setActiveAuthMode(mode: AuthMode): Promise<void> {
+  if (process.env.NODE_ENV !== 'test' && mode !== 'jwt') {
+    throw new Error('The application only supports JWT authentication.');
+  }
   if (mode === activeMode) return;
   await activeAdapter.clear();
   activeMode = mode;
   activeAdapter = createAdapter(mode);
   setAuthTransport(activeAdapter);
-  await AsyncStorage.setItem(AUTH_STORAGE_KEYS.AUTH_MODE, mode);
 }
 
-async function hydratePersistedMode(): Promise<void> {
-  if (storageHydrated) return;
-  storageHydrated = true;
-  const stored = await AsyncStorage.getItem(AUTH_STORAGE_KEYS.AUTH_MODE);
-  if (isAuthMode(stored) && stored !== activeMode) {
-    activeMode = stored;
-    activeAdapter = createAdapter(stored);
-  }
-  setAuthTransport(activeAdapter);
-}
-
-/** Called once on app start. Restores the mode the developer last selected. */
+/** Called once on app start. Installs the JWT transport. */
 export async function bootstrapAuth(): Promise<void> {
-  await hydratePersistedMode();
+  setAuthTransport(activeAdapter);
 }
 
 export type { AuthAdapter, AuthMode, SessionState } from './AuthAdapter';

@@ -391,6 +391,65 @@ describe('the mutual gate', () => {
     expect(blockersFor(casual, noPreference)).toContain('goal');
   });
 
+  it('treats empty gender and goal lists as Any', () => {
+    const any = makeUser({
+      id: 'user_a',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+      preferences: preferences({ genders: [], relationshipGoals: [] }),
+    });
+    const friendship = makeUser({
+      id: 'user_b',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+      relationshipGoal: RelationshipGoal.FRIENDSHIP,
+    });
+
+    expect(checkEligibility(any, friendship).eligible).toBe(true);
+  });
+
+  it('requires explicit opt-in to profiles whose goal is not sure', () => {
+    const woman = makeUser({
+      id: 'user_a',
+      gender: Gender.FEMALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+      relationshipGoal: RelationshipGoal.FRIENDSHIP,
+      preferences: preferences({
+        genders: [Gender.MALE],
+        relationshipGoals: [RelationshipGoal.LONG_TERM],
+      }),
+    });
+    const carl = makeUser({
+      id: 'user_b',
+      gender: Gender.MALE,
+      sexualOrientation: SexualOrientation.STRAIGHT,
+      relationshipGoal: RelationshipGoal.NOT_SURE,
+      preferences: preferences({
+        genders: [Gender.FEMALE],
+        relationshipGoals: [RelationshipGoal.FRIENDSHIP],
+      }),
+    });
+
+    expect(blockersFor(woman, carl)).toContain('goal');
+    expect(blockersFor(carl, woman)).not.toContain('goal');
+    expect(passesBothWays(woman, carl)).toBe(false);
+
+    const openToNotSure = {
+      ...woman,
+      preferences: preferences({
+        genders: [Gender.MALE],
+        relationshipGoals: [RelationshipGoal.LONG_TERM, RelationshipGoal.NOT_SURE],
+      }),
+    };
+    expect(passesBothWays(openToNotSure, carl)).toBe(true);
+
+    const anyGoal = {
+      ...woman,
+      preferences: preferences({ genders: [Gender.MALE], relationshipGoals: [] }),
+    };
+    expect(passesBothWays(anyGoal, carl)).toBe(true);
+  });
+
   it('gates on sexual orientation compatibility (mutual)', () => {
     // Straight female (attracted to male) + gay female (attracted to female)
     // -> straight female NOT attracted to gay female, so mutual gate fails

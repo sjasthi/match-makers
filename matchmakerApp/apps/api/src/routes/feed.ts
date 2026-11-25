@@ -6,7 +6,13 @@ import { eligibilitySql } from '@/eligibility';
 import { pool } from '@/db';
 import { toPhoto, type PhotoRow, type UserRow } from '@/db/rows';
 import { asyncHandler, parse, send } from '@/http';
-import { bandFor, describeAffinity, PHOTOS_FOR_FULL_TASTE } from '@/matching';
+import {
+  bandFor,
+  describeAffinity,
+  PHOTOS_FOR_FULL_TASTE,
+  DECK_ENTER_SCORE,
+  DECK_EXIT_SCORE,
+} from '@/matching';
 
 export const feedRouter = Router();
 
@@ -49,8 +55,9 @@ const feedQuerySchema = z.object({
  * alternative was computing the whole pool's affinity on every request, which
  * measured at 569ms over 400,000 rows.
  *
- * Only candidates with a current photo-taste score of at least 80% are kept.
- * Candidates with no score or a lower score do not enter the Likes deck.
+ * Deck admission has hysteresis: a pair enters at `DECK_ENTER_SCORE` and, once
+ * revealed, stays until its score falls below `DECK_EXIT_SCORE`. Candidates
+ * with no score never enter the Likes deck.
  */
 interface CandidateRow extends UserRow {
   distance_km: number | null;
@@ -64,6 +71,8 @@ interface CandidateRow extends UserRow {
   stored_co_liked: number | null;
   stored_tags: string[] | null;
   stored_band: string | null;
+  /** When the pair first reached the deck's entry score, if it ever did. */
+  stored_revealed_at: Date | null;
   shared_goals: boolean;
 }
 
@@ -74,9 +83,11 @@ interface CandidateRow extends UserRow {
  * over every user in the database; that gate lives in SQL now, and the ranking
  * is a stored result rather than something computed per request.
  *
- * Only scored matches at 80% or above come back. A post deletion refreshes the
- * score cache before this query, so a stale high percentage cannot keep a
- * candidate in the deck after its evidence is gone.
+ * Deck admission is hysteretic: a pair enters at `DECK_ENTER_SCORE` and, once
+ * revealed, stays until its score falls below `DECK_EXIT_SCORE`. The reveal is
+ * a property of the pair, so both people see the same behaviour. A post
+ * deletion refreshes the score cache before this query, so a stale high
+ * percentage cannot keep a candidate in the deck after its evidence is gone.
  *
  * Both directions are load-bearing. The caller's filters decide what they are
  * shown, but a candidate whose own filters exclude the caller is someone who
@@ -107,6 +118,7 @@ feedRouter.get(
           ms.co_liked_count  AS stored_co_liked,
           ms.shared_tags     AS stored_tags,
           ms.band            AS stored_band,
+          ms.revealed_at     AS stored_revealed_at,
           (viewer.relationship_goal = eligible.relationship_goal) AS shared_goals
         FROM eligible
         CROSS JOIN viewer
@@ -119,7 +131,10 @@ feedRouter.get(
           stored_score AS score
         FROM scored
         WHERE stored_score IS NOT NULL
-          AND stored_score >= 80
+          AND (
+            stored_score >= ${DECK_ENTER_SCORE}
+            OR (stored_revealed_at IS NOT NULL AND stored_score >= ${DECK_EXIT_SCORE})
+          )
       )
       SELECT
         strong_matches.*,

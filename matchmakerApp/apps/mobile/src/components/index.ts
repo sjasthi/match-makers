@@ -3,7 +3,6 @@ export type { IconName } from './AppIcon';
 export { ScreenContainer } from './ScreenContainer';
 export { EmptyState, LoadingState } from './states';
 export { FormField, FormError, FormHint } from './FormField';
-export { AuthModeSwitcher } from './AuthModeSwitcher';
 export { SwipeCard } from './SwipeCard';
 export { SwipeActions } from './SwipeActions';
 export { MatchCelebration } from './MatchCelebration';

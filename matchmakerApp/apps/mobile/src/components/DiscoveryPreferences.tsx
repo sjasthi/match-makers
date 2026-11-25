@@ -10,17 +10,26 @@ import {
 import { AgeRangeField, SelectChips, Stepper, type ChipOption } from '@/components';
 import { APP_CONFIG, SPACING } from '@/constants';
 
-const GENDER_OPTIONS: ReadonlyArray<ChipOption<Gender>> = [
+type GenderFilter = Gender | 'any';
+type GoalFilter = RelationshipGoal | 'any';
+
+const ANY_GENDERS = Object.values(Gender);
+const ANY_GOALS = Object.values(RelationshipGoal);
+
+const GENDER_OPTIONS: ReadonlyArray<ChipOption<GenderFilter>> = [
+  { value: 'any', label: 'Any gender' },
   { value: Gender.FEMALE, label: 'Women' },
   { value: Gender.MALE, label: 'Men' },
   { value: Gender.NON_BINARY, label: 'Non-binary people' },
 ];
 
-const GOAL_OPTIONS: ReadonlyArray<ChipOption<RelationshipGoal>> = [
+const GOAL_OPTIONS: ReadonlyArray<ChipOption<GoalFilter>> = [
+  { value: 'any', label: 'Any goal' },
   { value: RelationshipGoal.LONG_TERM, label: 'Long term' },
   { value: RelationshipGoal.SHORT_TERM, label: 'Short term' },
   { value: RelationshipGoal.CASUAL, label: 'Casual' },
   { value: RelationshipGoal.FRIENDSHIP, label: 'Friendship' },
+  { value: RelationshipGoal.NOT_SURE, label: 'Not sure yet' },
 ];
 
 const DISTANCE_OPTIONS: ReadonlyArray<ChipOption<DistanceMode>> = [
@@ -64,6 +73,32 @@ interface Props {
  */
 export function DiscoveryPreferences({ preferences, onChange, goalHelperText }: Props) {
   const isGlobal = preferences.distanceMode === 'global';
+  const anyGenderSelected = ANY_GENDERS.every((gender) => preferences.genders.includes(gender));
+  const anyGoalSelected = ANY_GOALS.every((goal) => preferences.relationshipGoals.includes(goal));
+  const selectedGenders: GenderFilter[] = anyGenderSelected ? ['any'] : preferences.genders;
+  const selectedGoals: GoalFilter[] = anyGoalSelected ? ['any'] : preferences.relationshipGoals;
+
+  const toggleGender = (value: GenderFilter) => {
+    if (value === 'any') {
+      onChange({ ...preferences, genders: ANY_GENDERS });
+      return;
+    }
+    onChange({
+      ...preferences,
+      genders: anyGenderSelected ? [value] : toggleIn(preferences.genders, value),
+    });
+  };
+
+  const toggleGoal = (value: GoalFilter) => {
+    if (value === 'any') {
+      onChange({ ...preferences, relationshipGoals: ANY_GOALS });
+      return;
+    }
+    onChange({
+      ...preferences,
+      relationshipGoals: anyGoalSelected ? [value] : toggleIn(preferences.relationshipGoals, value),
+    });
+  };
 
   const adjustDistance = (delta: number) => {
     const maxDistance = Math.min(
@@ -121,25 +156,22 @@ export function DiscoveryPreferences({ preferences, onChange, goalHelperText }: 
       </View>
 
       <SelectChips
-        label="Show me"
+        label="Genders I'm interested in"
         options={GENDER_OPTIONS}
-        selected={preferences.genders}
-        onToggle={(value) =>
-          onChange({ ...preferences, genders: toggleIn(preferences.genders, value) })
-        }
+        selected={selectedGenders}
+        onToggle={toggleGender}
+        helperText="Any gender removes this filter; age, distance, and other criteria still apply."
       />
 
       <SelectChips
-        label="Looking for"
+        label="Goals I'm open to"
         options={GOAL_OPTIONS}
-        selected={preferences.relationshipGoals}
-        onToggle={(value) =>
-          onChange({
-            ...preferences,
-            relationshipGoals: toggleIn(preferences.relationshipGoals, value),
-          })
+        selected={selectedGoals}
+        onToggle={toggleGoal}
+        helperText={
+          goalHelperText ??
+          'Not sure is a distinct goal; select it or Any goal to include those profiles.'
         }
-        helperText={goalHelperText ?? 'Used by the matching engine to score profiles.'}
       />
     </View>
   );

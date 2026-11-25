@@ -88,7 +88,7 @@ describe('Profile menu navigation', () => {
 
     fireEvent.press(screen.getByLabelText('Settings'));
 
-    await waitFor(() => expect(screen.getByText('Reset mock data')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('ADMIN')).toBeTruthy());
   });
 
   it('opens the taste profile from the Profile tab', async () => {
@@ -114,12 +114,11 @@ describe('Profile menu navigation', () => {
     await openProfileTab();
 
     fireEvent.press(screen.getByLabelText('Settings'));
-    await waitFor(() => expect(screen.getByText('Reset mock data')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('ADMIN')).toBeTruthy());
 
-    // The row only enables in mock mode, and mock is the default here.
     fireEvent.press(screen.getByTestId('settings-admin-row'));
 
-    // 21 accounts: the demo account plus 20 seeded candidates.
+    // Test fixtures include one signed-in account and 20 candidate accounts.
     await waitFor(() => expect(screen.getByText('21 ACCOUNTS')).toBeTruthy(), { timeout: 15_000 });
   });
 });
@@ -177,7 +176,7 @@ describe('the photo library admin route', () => {
     await openProfileTab();
 
     fireEvent.press(screen.getByLabelText('Settings'));
-    await waitFor(() => expect(screen.getByText('Reset mock data')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('ADMIN')).toBeTruthy());
 
     fireEvent.press(screen.getByTestId('settings-admin-posts-row'));
 

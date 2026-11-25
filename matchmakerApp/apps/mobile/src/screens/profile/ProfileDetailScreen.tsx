@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text, Divider } from 'react-native-paper';
 import type { RouteProp } from '@react-navigation/native';
@@ -12,10 +12,8 @@ import {
   ProfileImage,
   PhotoViewer,
 } from '@/components';
-import { mockDb } from '@/services/mock/database';
-import { getAuthAdapter } from '@/services/auth';
 import { updateProfile } from '@/services/profile';
-import { ageFromDateOfBirth } from '@/utils/mockData';
+import { ageFromDateOfBirth } from '@/utils/date';
 import { distanceBetween } from '@/utils/eligibility';
 import { formatDistance } from '@/utils/distance';
 import {
@@ -58,30 +56,13 @@ function describeDistanceTo(viewer: User, candidate: User): string {
 
 export function ProfileDetailScreen() {
   const route = useRoute<DetailRoute>();
-  const { userId, user: passedUser, taste } = route.params;
+  const { user: passedUser, taste } = route.params;
   const [user, setUser] = useState<User | null>(passedUser ?? null);
   const viewer = useAuthStore((store) => store.user);
   // Which photo is being looked at full size, if any.
   const [previewId, setPreviewId] = useState<string | null>(null);
   // Set when a removal fails, so the reason is on screen rather than nowhere.
   const [photoError, setPhotoError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // The feed passes the full record through navigation params. Only the mock
-    // mode needs a lookup, because there is no /profiles/:id endpoint to hit.
-    if (passedUser || getAuthAdapter().mode !== 'mock') return;
-
-    let active = true;
-    void mockDb.findUserById(userId).then((found) => {
-      if (!active || !found) return;
-      const { password: _password, ...rest } = found;
-      setUser(rest);
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [userId, passedUser]);
 
   /**
    * Removes one of this person's own photos.

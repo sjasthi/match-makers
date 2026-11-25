@@ -9,7 +9,6 @@ import {
   PrimaryButton,
 } from '@/components';
 import { useAsync } from '@/hooks/useAsync';
-import { useAuthMode } from '@/hooks';
 import {
   listPendingVerifications,
   acceptVerification,
@@ -23,13 +22,12 @@ import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
  * Shows submitted photos with Accept/Decline buttons.
  */
 export function AdminVerificationsScreen() {
-  const [authMode] = useAuthMode();
   const [actionError, setActionError] = useState<string | null>(null);
   const [actingId, setActingId] = useState<string | null>(null);
 
   const { data, error, isLoading, refetch } = useAsync<AdminVerificationSubmission[]>(
     () => listPendingVerifications(),
-    [authMode]
+    []
   );
 
   const handleAccept = async (submissionId: string) => {
@@ -51,7 +49,7 @@ export function AdminVerificationsScreen() {
     setActionError(null);
     setActingId(submissionId);
     try {
-      await declineVerification(submissionId, 'Photo was not approved in this demo review.');
+      await declineVerification(submissionId, 'Photo was not approved in this review.');
       refetch();
     } catch (caught) {
       setActionError(

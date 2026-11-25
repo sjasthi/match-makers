@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor as rtlWaitFor } from '@testing-libra
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { preferencesSchema } from '@match-makers/shared';
+import { Gender, RelationshipGoal, preferencesSchema } from '@match-makers/shared';
 
 import { PreferencesScreen } from '@/screens/profile/PreferencesScreen';
 import { defaultPreferences, describeDistance } from '@/components';
@@ -11,7 +11,7 @@ import { MockAuthAdapter } from '@/services/auth/MockAuthAdapter';
 import { DEMO_EMAIL, DEMO_PASSWORD, generateDemoUser } from '@/utils/mockData';
 import { hasCoordinates } from '@/utils/distance';
 import { useAuthStore } from '@/stores/authStore';
-import type { User } from '@match-makers/shared';
+import type { User, UserPreferences } from '@match-makers/shared';
 
 jest.setTimeout(30_000);
 
@@ -42,6 +42,19 @@ async function signInDemo() {
   return adapter;
 }
 
+async function signInDemoWithPreferences(overrides: Partial<UserPreferences>) {
+  const adapter = await signInDemo();
+  const stored = await mockDb.findUserByEmail(DEMO_EMAIL);
+  if (!stored) throw new Error('Demo account was not loaded');
+
+  await mockDb.saveUser({
+    ...stored,
+    preferences: { ...stored.preferences, ...overrides },
+  });
+  useAuthStore.setState({ state: 'authenticated', user: await adapter.getCurrentUser() });
+  return adapter;
+}
+
 /** The stepper is only on screen while the nearby radius is in force. */
 function radiusStepper() {
   return screen.queryByTestId('stepper-increase-within');
@@ -63,6 +76,8 @@ describe('Discovery preferences', () => {
     await signInDemo();
     renderScreen();
 
+    expect(screen.getByText("Genders I'm interested in")).toBeTruthy();
+    expect(screen.getByText("Goals I'm open to")).toBeTruthy();
     expect(screen.getByText('Nearby')).toBeTruthy();
     expect(screen.getByText('Global')).toBeTruthy();
     expect(screen.getByText('Only people within 50 km of you.')).toBeTruthy();
@@ -140,6 +155,33 @@ describe('Discovery preferences', () => {
     await waitFor(async () => {
       const stored = await adapter.getCurrentUser();
       expect(stored?.preferences.ageRange).toMatchObject({ min: 25 });
+    });
+  });
+
+  it('supports an explicit Not sure goal and the Any filters', async () => {
+    const adapter = await signInDemoWithPreferences({
+      relationshipGoals: [RelationshipGoal.LONG_TERM],
+    });
+    renderScreen();
+
+    fireEvent.press(screen.getByText('Not sure yet'));
+    fireEvent.press(screen.getByText('Save'));
+
+    await waitFor(async () => {
+      const stored = await adapter.getCurrentUser();
+      expect(stored?.preferences.relationshipGoals).toContain(RelationshipGoal.NOT_SURE);
+    });
+
+    fireEvent.press(screen.getByText('Any gender'));
+    fireEvent.press(screen.getByText('Any goal'));
+    fireEvent.press(screen.getByText('Save'));
+
+    await waitFor(async () => {
+      const stored = await adapter.getCurrentUser();
+      expect(new Set(stored?.preferences.genders)).toEqual(new Set(Object.values(Gender)));
+      expect(new Set(stored?.preferences.relationshipGoals)).toEqual(
+        new Set(Object.values(RelationshipGoal))
+      );
     });
   });
 });

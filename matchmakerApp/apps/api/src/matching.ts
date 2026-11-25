@@ -1,4 +1,4 @@
-import { HALF_LIFE_SECONDS, TAG_STRENGTH_SQL } from '@/affinity';
+import { TAG_STRENGTH_SQL } from '@/affinity';
 import type { Queryable } from '@/db';
 
 /**
@@ -10,9 +10,9 @@ import type { Queryable } from '@/db';
  * ordered one way and a card explaining itself another way is a lie with two
  * authors.
  *
- * A pair has one score, stored in both viewer/candidate directions. The
- * shared-photo half ages from the later of the two likes, when the overlap
- * first became real, so reversing the pair cannot change its score.
+ * A pair has one score, stored in both viewer/candidate directions. Reaction
+ * timestamps do not affect the score, so the same reaction history produces
+ * the same score whenever it is recomputed.
  *
  * The tag half of the taste signal is a **cosine similarity** between the two
  * people's tag-weight vectors -- the dot product over the tags they share,
@@ -22,6 +22,12 @@ import type { Queryable } from '@/db';
  * equally well matched on the two they had in common. Cosine is the standard
  * measure, it is bounded in [0, 1] without a clamp, and it prices a broad
  * taste against a narrow one honestly.
+ *
+ * A tag's weight inside those vectors is its net approval scaled by how rare
+ * the tag is in the photo library -- see `TAG_STRENGTH_SQL`. The rarity is
+ * what keeps the similarity measuring the pair's taste rather than the
+ * library's composition as the library grows, and because it is a property of
+ * the tag rather than of either person, the pair score stays symmetric.
  *
  * The ranking is computed by `rescoreForViewer` and stored in `match_scores`,
  * rather than being computed per request. The reason is cost, and it is not a
@@ -86,6 +92,43 @@ function bandSql(scoreColumn: string): string {
 }
 
 /**
+ * The score a pair needs to enter the Likes deck.
+ *
+ * Kept here, next to the bands, so the entry bar, the exit floor and the badge
+ * floors are all in one file. The feed interpolates this into its SQL rather
+ * than calling a function, because the admission happens inside the query.
+ */
+export const DECK_ENTER_SCORE = 80;
+
+/**
+ * The floor a revealed pair must stay above to remain in the deck.
+ *
+ * Hysteresis: a pair that has already appeared in somebody's deck stays
+ * visible until its score falls this far, so a percentage wobbling around the
+ * entry bar -- after a rescore, a library import, or the pair's own new
+ * reactions -- cannot silently remove a card somebody was already shown. Below
+ * the exit floor the fall is real rather than noise, and the pair leaves.
+ *
+ * The gap to the entry score is the whole point: a pair bouncing between 79
+ * and 81 flickers in and out of the deck with a single bar, and with two bars
+ * it stays put until its evidence has genuinely collapsed.
+ */
+export const DECK_EXIT_SCORE = 75;
+
+/**
+ * Whether a pair belongs in the deck, given its score and reveal state.
+ *
+ * The readable restatement of the rule the feed query applies, so the tests can
+ * pin it and a reader does not have to parse SQL to know what "in the deck"
+ * means.
+ */
+export function admitsToDeck(score: number | null, revealedAt: Date | null): boolean {
+  if (score === null) return false;
+  if (score >= DECK_ENTER_SCORE) return true;
+  return revealedAt !== null && score >= DECK_EXIT_SCORE;
+}
+
+/**
  * The shared CTEs: the eligible pool, the two halves of the taste signal, and
  * the aggregation that turns them into a score.
  *
@@ -103,6 +146,21 @@ function rankingCtes(eligibilitySql: string): string {
       SELECT relationship_goal FROM users WHERE id = $1
     ),
     /*
+     * The library statistics the tag weights are scaled by: how many photos
+     * exist, and how many carry each tag. Computed once per rescore so every
+     * pair in the run is priced by the same library -- see TAG_STRENGTH_SQL
+     * in affinity.ts for why the scaling exists at all.
+     */
+    library AS (
+      SELECT count(*)::int AS p FROM posts
+    ),
+    tag_docs AS (
+      SELECT tag, count(*)::int AS docs
+        FROM posts
+        CROSS JOIN LATERAL unnest(posts.tags) AS tag
+       GROUP BY tag
+    ),
+    /*
      * The viewer's half, from the summary row: their like count and how many
      * tags they lean towards, without aggregating either at read time.
      */
@@ -115,6 +173,8 @@ function rankingCtes(eligibilitySql: string): string {
     viewer_pos AS (
       SELECT a.tag, ${TAG_STRENGTH_SQL} AS strength
         FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag
+        CROSS JOIN library l
        WHERE a.user_id = $1 AND a.likes > a.dislikes
     ),
     /*
@@ -139,11 +199,13 @@ function rankingCtes(eligibilitySql: string): string {
      * approximation: the tag half of the score only ever reads tags both people
      * lean towards.
      *
-     * The composite index (tag, last_activity_at) serves this directly.
+     * The tag-leading index serves this directly.
      */
     cand_pos AS (
       SELECT a.user_id, a.tag, ${TAG_STRENGTH_SQL} AS strength
         FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag
+        CROSS JOIN library l
        WHERE a.tag IN (SELECT tag FROM viewer_pos)
          AND a.likes > a.dislikes
     ),
@@ -175,8 +237,10 @@ function rankingCtes(eligibilitySql: string): string {
     br AS (
       SELECT a.user_id, sqrt(COALESCE(sum(${TAG_STRENGTH_SQL} * ${TAG_STRENGTH_SQL}), 0)) AS norm
         FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag
+        CROSS JOIN library l
        WHERE a.likes > a.dislikes
-       GROUP BY a.user_id
+       GROUP BY a.user_id, l.p
     ),
     ov AS (
       SELECT cp.user_id,
@@ -190,21 +254,12 @@ function rankingCtes(eligibilitySql: string): string {
     ),
     co AS (
       /*
-       * Photos both people liked, weighted by how recently the shared evidence
-       * was established: the later of the two likes. Using only the viewer's
-       * timestamp made the same pair score differently in the reverse deck.
-       *
-       * A raw count(*) would make a photo liked a year ago count exactly as
-       * much as one liked this morning, which is the thing the half-life exists
-       * to prevent -- and the co-like half is 65% of the signal, so leaving it
-       * undecayed would make the decay almost invisible in the total.
+       * One count per photo liked by both people. Saturation below keeps a
+       * prolific pair from running away with the score; the evidence does not
+       * lose weight just because it is old.
        */
        SELECT r2.user_id,
-              sum(exp(
-                - extract(epoch FROM (now() - GREATEST(r1.created_at, r2.created_at)))
-                  * ln(2) / ${HALF_LIFE_SECONDS}
-              )) AS co_likes,
-              count(*) AS co_count
+               count(*) AS co_count
         FROM post_reactions r1
         JOIN post_reactions r2
           ON r2.post_id = r1.post_id
@@ -222,7 +277,7 @@ function rankingCtes(eligibilitySql: string): string {
       SELECT
         ranked.*,
         round(CAST(
-          ( ${CO_LIKE_SHARE} * (COALESCE(co.co_likes, 0)::float / (COALESCE(co.co_likes, 0) + ${CO_LIKE_SATURATION}))
+          ( ${CO_LIKE_SHARE} * (COALESCE(co.co_count, 0)::float / (COALESCE(co.co_count, 0) + ${CO_LIKE_SATURATION}))
           + ${TAG_SHARE} * LEAST(1,
               CASE
                 WHEN vb.norm > 0 AND COALESCE(br.norm, 0) > 0
@@ -276,6 +331,11 @@ export function rankingSelectSql(eligibilitySql: string): string {
  * them. The eligibility SQL must omit the already-swiped gate: someone who has
  * swiped may still appear in the other person's deck.
  *
+ * A pair whose score reaches `DECK_ENTER_SCORE` is marked revealed, once; the
+ * marker survives every later rescore so the deck's hysteresis has something to
+ * read. A full rescore therefore also backfills the reveal state for every
+ * pair already over the entry score.
+ *
  * Returns the number of candidate pairs scored (not the two stored rows per
  * pair).
  */
@@ -284,23 +344,52 @@ export async function rescoreForViewer(
   viewerId: string,
   eligibilitySql: string
 ): Promise<number> {
-  // Replace every cached direction involving this person. A changed reaction
-  // affects both their own ranking and how everyone else ranks them.
-  await client.query(
-    `DELETE FROM match_scores WHERE viewer_id = $1 OR candidate_id = $1`,
+  /*
+   * The pair-reveal state has to survive the replace below. The DELETE is
+   * load-bearing -- it removes pairs the current eligibility no longer admits
+   * -- but it would also wipe `revealed_at`, and "once revealed" only means
+   * anything if it survives every rescore. Snapshot the reveal times first
+   * and offer them back to the INSERT.
+   *
+   * Both directions of a pair carry the same reveal time by construction; the
+   * earliest wins if they ever disagree, and DISTINCT ON keeps one row per
+   * partner so the join below cannot duplicate a pair.
+   */
+  const { rows: kept } = await client.query<{ partner_id: string; revealed_at: Date }>(
+    `SELECT DISTINCT ON (partner_id) partner_id, revealed_at
+       FROM (
+              SELECT candidate_id AS partner_id, revealed_at
+                FROM match_scores
+               WHERE viewer_id = $1 AND revealed_at IS NOT NULL
+              UNION ALL
+              SELECT viewer_id AS partner_id, revealed_at
+                FROM match_scores
+               WHERE candidate_id = $1 AND revealed_at IS NOT NULL
+            ) snaps
+      ORDER BY partner_id, revealed_at`,
     [viewerId]
   );
+
+  // Replace every cached direction involving this person. A changed reaction
+  // affects both their own ranking and how everyone else ranks them.
+  await client.query(`DELETE FROM match_scores WHERE viewer_id = $1 OR candidate_id = $1`, [
+    viewerId,
+  ]);
 
   const { rowCount } = await client.query(
     `
     INSERT INTO match_scores
-      (viewer_id, candidate_id, score, taste_affinity, co_liked_count, shared_tags, band, computed_at)
+      (viewer_id, candidate_id, score, taste_affinity, co_liked_count, shared_tags, band, revealed_at, computed_at)
     SELECT pair.viewer_id, pair.candidate_id, f.score, f.taste_affinity, f.co_liked_count, f.shared_tags,
-           ${bandSql('f.score')}, now()
+           ${bandSql('f.score')},
+           COALESCE(k.revealed_at, CASE WHEN f.score >= ${DECK_ENTER_SCORE} THEN now() END),
+           now()
       FROM (${rankingSelectSql(eligibilitySql)}) f
       CROSS JOIN LATERAL (
         VALUES ($1::uuid, f.id), (f.id, $1::uuid)
       ) AS pair(viewer_id, candidate_id)
+      LEFT JOIN unnest($2::uuid[], $3::timestamptz[]) AS k(partner_id, revealed_at)
+        ON k.partner_id = f.id
      ORDER BY pair.viewer_id, pair.candidate_id
     ON CONFLICT (viewer_id, candidate_id) DO UPDATE SET
       score = EXCLUDED.score,
@@ -310,7 +399,7 @@ export async function rescoreForViewer(
       band = EXCLUDED.band,
       computed_at = EXCLUDED.computed_at
     `,
-    [viewerId]
+    [viewerId, kept.map((row) => row.partner_id), kept.map((row) => row.revealed_at)]
   );
 
   return Math.floor((rowCount ?? 0) / 2);

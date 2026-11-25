@@ -43,11 +43,11 @@ export function PreferencesScreen() {
     setError(null);
 
     if (preferences.genders.length === 0) {
-      setError('Pick at least one group to see.');
+      setError('Choose one or more genders, or select Any gender.');
       return;
     }
     if (preferences.relationshipGoals.length === 0) {
-      setError('Pick at least one relationship goal.');
+      setError('Choose one or more goals, or select Any goal.');
       return;
     }
 

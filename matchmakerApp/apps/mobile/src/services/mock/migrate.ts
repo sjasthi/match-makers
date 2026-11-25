@@ -170,11 +170,13 @@ export function normaliseState(state: unknown): { state: unknown; changed: boole
   });
   const posts = normalisePosts(state.posts);
   const postReactions = normalisePostReactions(state.postReactions, posts);
+  const deckReveals = normaliseDeckReveals(state.deckReveals);
 
   const collectionsChanged =
     !Array.isArray(state.posts) ||
     !Array.isArray(state.postReactions) ||
-    !Array.isArray(state.verificationSubmissions);
+    !Array.isArray(state.verificationSubmissions) ||
+    !Array.isArray(state.deckReveals);
 
   return {
     state: {
@@ -183,9 +185,31 @@ export function normaliseState(state: unknown): { state: unknown; changed: boole
       posts,
       postReactions,
       verificationSubmissions,
+      deckReveals,
     },
     changed: normalizedUsers.changed || clearedLegacyBadges || collectionsChanged,
   };
+}
+
+/**
+ * Pairs that have reached the deck's entry score once.
+ *
+ * Normalised rather than trusted for the same reason as the other collections:
+ * a blob written before the reveal list existed has no key at all, and a
+ * half-written entry with fewer than two ids would silently match nothing
+ * forever.
+ */
+function normaliseDeckReveals(raw: unknown): Array<[string, string]> {
+  if (!Array.isArray(raw)) return [];
+
+  const kept: Array<[string, string]> = [];
+  for (const entry of raw) {
+    if (!Array.isArray(entry) || entry.length !== 2) continue;
+    const [a, b] = entry;
+    if (typeof a !== 'string' || typeof b !== 'string' || a === b) continue;
+    kept.push([a, b]);
+  }
+  return kept;
 }
 
 /**

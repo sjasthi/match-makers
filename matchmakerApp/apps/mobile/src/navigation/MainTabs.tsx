@@ -1,4 +1,5 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useWindowDimensions } from 'react-native';
 import { AppIcon, type IconName } from '@/components';
 import { PhotoFeedScreen } from '@/screens/main/PhotoFeedScreen';
 import { LikesScreen } from '@/screens/main/LikesScreen';
@@ -9,6 +10,15 @@ import { COLORS } from '@/constants';
 import type { MainTabParamList } from './types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
+const TAB_BAR_LABEL_BREAKPOINT = 480;
+
+const TAB_LABELS: Record<keyof MainTabParamList, string> = {
+  Feed: 'Photos',
+  Likes: 'Likes',
+  Matches: 'Matches',
+  Messages: 'Messages',
+  Profile: 'Profile',
+};
 
 /**
  * The first two icons are deliberately distinct shapes rather than two hearts.
@@ -24,6 +34,8 @@ const TAB_ICONS: Record<keyof MainTabParamList, IconName> = {
 };
 
 export function MainTabs() {
+  const { width } = useWindowDimensions();
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -31,6 +43,8 @@ export function MainTabs() {
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: COLORS.textMuted,
         tabBarStyle: { borderTopColor: COLORS.border, backgroundColor: COLORS.background },
+        tabBarShowLabel: width >= TAB_BAR_LABEL_BREAKPOINT,
+        tabBarAccessibilityLabel: TAB_LABELS[route.name],
         tabBarIcon: ({ color, size }) => (
           <AppIcon name={TAB_ICONS[route.name]} size={size} color={color} />
         ),

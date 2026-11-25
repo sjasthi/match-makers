@@ -13,7 +13,6 @@ import { Text, TextInput } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Avatar, ErrorBanner, LoadingState, AppIcon } from '@/components';
 import { fetchMessages, sendMessage, type ChatMessage } from '@/services/matches';
-import { getAuthAdapter } from '@/services/auth';
 import { useRealtimeMessages } from '@/hooks/useRealtime';
 import { REALTIME_POLL_INTERVAL_MS } from '@/services/realtime';
 import { BORDER_RADIUS, COLORS, FONT_SIZES, SPACING } from '@/constants';
@@ -90,11 +89,9 @@ export function ChatScreen() {
    * is not connected, the screen polls instead -- so a dropped connection
    * costs latency, not messages.
    *
-   * Not in mock mode: there is no server to poll, and the mock's messages are
-   * already in memory.
+   * Polling remains the fallback if the realtime connection is unavailable.
    */
   useEffect(() => {
-    if (getAuthAdapter().mode === 'mock') return undefined;
     if (realtimeStatus === 'open') return undefined;
 
     const timer = setInterval(() => {

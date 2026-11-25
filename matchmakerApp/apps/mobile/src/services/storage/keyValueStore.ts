@@ -26,7 +26,7 @@ export const secureStore: KeyValueStore = {
 };
 
 /**
- * Larger, unencrypted store for non-secret collections (mock database,
+ * Larger, unencrypted store for non-secret collections (test database,
  * cached feed pages, UI preferences). Works on every platform including web.
  */
 export const persistentStore: KeyValueStore = {

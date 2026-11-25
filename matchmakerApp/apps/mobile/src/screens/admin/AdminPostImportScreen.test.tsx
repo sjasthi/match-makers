@@ -93,7 +93,7 @@ function image(width: number, resized: boolean, bytes?: number): PickedImage {
 }
 
 beforeEach(async () => {
-  useAuthStore.setState({ state: 'unknown', user: null, error: null, authMode: 'mock' });
+  useAuthStore.setState({ state: 'unknown', user: null, error: null });
   await mockDb.reset();
   pick.mockReset();
   pick.mockResolvedValue([]);

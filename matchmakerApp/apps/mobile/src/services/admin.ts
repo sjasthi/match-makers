@@ -2,20 +2,12 @@ import { postImportSchema } from '@match-makers/shared';
 import type { Post, User } from '@match-makers/shared';
 import { getAuthAdapter } from '@/services/auth';
 import { requestWithData } from '@/services/api/client';
-import { mockDb, toPublicUser, type AdminPostSummary } from '@/services/mock/database';
+import { mockDb, toPublicUser } from '@/services/mock/database';
 import { withMockNetwork } from '@/services/mock/network';
 import { isProfileComplete } from '@/services/profile';
-import { ageFromDateOfBirth, DEMO_EMAIL } from '@/utils/mockData';
+import { ageFromDateOfBirth } from '@/utils/date';
 
-/**
- * What the admin routes send per account.
- *
- * `age`, `isDemo` and `isProfileComplete` are computed here rather than on the
- * server. They depend on `ageFromDateOfBirth`, `DEMO_EMAIL` and
- * `isProfileComplete`, all of which live in this app, and the last one gates the
- * feed -- so there must be exactly one definition of it. The API deliberately
- * sends only the two counts it can compute cheaply.
- */
+/** Fields returned by the API's admin account list. */
 interface AdminUserRecord {
   user: User;
   matchCount: number;
@@ -23,45 +15,20 @@ interface AdminUserRecord {
 }
 
 /**
- * Inspection of every account, and the write path that fills the photo feed.
- *
- * Works against the mock database or `apps/api`, chosen by
- * `getAuthAdapter().mode` like every other service here. In `jwt` mode the API's
- * own `requireAdmin` is what decides -- this module sends no flag and grants
- * nothing, it just calls the route and lets a 403 surface.
- *
- * Originally this existed purely so seeded and locally registered accounts could
- * be checked while testing, which is why several of these functions were
- * mock-only. The account half is
- * deliberately the mirror image of `services/profile.ts`: that module answers
- * "is this person ready to be shown in the feed", this one shows the answer for
- * everybody at once, which is what you cannot do from inside a single session.
- *
- * `listAllUsers`, `getAdminUser` and the post read paths write nothing.
- * `mockDb` is the test fixture, so an admin edit would quietly destroy the
- * seeded state the next test run depends on.
- *
- * The photo library is the one deliberate exception. A feed with nothing in it
- * is not a prototype of anything, and there is no other way to get content into
- * it, so the import and tag paths below write on purpose. The blast radius is
- * limited: they touch `posts` and `postReactions` only, never `users`, and the
- * "reset mock data" action in Settings is still the only thing that can undo
- * them.
+ * Admin operations use the API in the app; the mock branch is retained only for
+ * Jest tests. The API owns authorization and returns 403 to accounts without
+ * admin access.
  */
 
 export class AdminUnavailableError extends Error {
   constructor() {
-    super('The admin inspector only works in mock mode.');
+    super('The local admin fixture is only available in tests.');
     this.name = 'AdminUnavailableError';
   }
 }
 
 /**
- * Throws when the mock database cannot answer.
- *
- * Only used by the mock branches below. In `jwt` mode there is no equivalent
- * check here, because whether an admin request succeeds is the API's decision,
- * not the client's: it knows `users.is_admin` and this module does not.
+ * Prevents the test fixture from being used outside its test-only auth mode.
  */
 function assertMockMode(): void {
   if (getAuthAdapter().mode !== 'mock') {
@@ -80,8 +47,6 @@ export class AdminImportError extends Error {
 export interface AdminUserSummary {
   user: User;
   age: number;
-  /** The seeded demo account, or anything registered under the demo domain. */
-  isDemo: boolean;
   /** Matches what gates the feed for this account. */
   isProfileComplete: boolean;
   /** Photos this account has answered, which is what the matcher now ranks on. */
@@ -94,7 +59,6 @@ function toSummary(user: User, matchCount: number, answeredPhotos: number): Admi
   return {
     user,
     age: ageFromDateOfBirth(user.dateOfBirth),
-    isDemo: user.email.toLowerCase() === DEMO_EMAIL,
     isProfileComplete: isProfileComplete(user),
     answeredPhotos,
     photoCount: user.photos.length,
@@ -102,12 +66,16 @@ function toSummary(user: User, matchCount: number, answeredPhotos: number): Admi
   };
 }
 
+export interface AdminPostSummary {
+  post: Post;
+  likes: number;
+  dislikes: number;
+}
+
 /**
  * Every account, newest first.
  *
- * Newest first because that is how you find the account you just registered
- * while testing. The email tiebreak is there so accounts seeded inside the same
- * millisecond do not shuffle between renders.
+ * Newest first, with email as a stable tiebreak for equal timestamps.
  */
 export async function listAllUsers(): Promise<AdminUserSummary[]> {
   if (getAuthAdapter().mode !== 'mock') {
@@ -270,9 +238,8 @@ export async function importPosts(
  * tagging a batch of photos actually wants, and once they have typed something
  * the filtering is a substring match anyway.
  *
- * Counted from the canonical form already stored, so `Dogs` typed as `dog` and
- * seeded as `dog` are one entry with two photos rather than two entries nobody
- * can tell apart.
+ * Counted from the canonical form already stored, so equivalent spellings do
+ * not appear as separate entries.
  */
 export async function listAllTags(): Promise<Array<{ tag: string; count: number }>> {
   if (getAuthAdapter().mode !== 'mock') {

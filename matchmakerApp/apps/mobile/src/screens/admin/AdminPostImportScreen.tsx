@@ -11,7 +11,6 @@ import {
   SelectChips,
   PhotoViewer,
 } from '@/components';
-import { useAuthMode } from '@/hooks';
 import { useAsync } from '@/hooks/useAsync';
 import { AdminImportError, importPosts, listAllTags } from '@/services/admin';
 import {
@@ -102,7 +101,6 @@ function sizeDescription(size: ImportSizeId): string {
 
 export function AdminPostImportScreen() {
   const navigation = useNavigation<Nav>();
-  const [authMode] = useAuthMode();
 
   const [picked, setPicked] = useState<PickedImage[]>([]);
   // Which picked photo is being looked at full size, if any.
@@ -121,7 +119,7 @@ export function AdminPostImportScreen() {
   // suggestions yet" as if the library were empty.
   const { data: knownTags } = useAsync<Array<{ tag: string; count: number }>>(
     async () => listAllTags(),
-    [authMode]
+    []
   );
 
   const usable = picked.filter((image) => image.uri);

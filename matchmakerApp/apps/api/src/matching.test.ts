@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { pool, type Queryable } from './db';
-import { rescoreForViewer } from './matching';
+import { admitsToDeck, DECK_ENTER_SCORE, rescoreForViewer } from './matching';
 
 /**
  * The ranking, tested against the database.
@@ -117,6 +117,17 @@ async function scoreFor(
   };
 }
 
+/** When the pair was first revealed to this viewer's deck, if it ever was. */
+async function revealFor(viewerId: string, candidateId: string): Promise<Date | null> {
+  const { rows } = await pool.query<{ revealed_at: Date | null }>(
+    `SELECT revealed_at
+       FROM match_scores
+      WHERE viewer_id = $1 AND candidate_id = $2`,
+    [viewerId, candidateId]
+  );
+  return rows[0]?.revealed_at ?? null;
+}
+
 /** Rebuilds the vectors for the test users, as a reaction would have. */
 async function rebuildVectors(client: Queryable): Promise<void> {
   await client.query(
@@ -172,6 +183,17 @@ async function rebuildVectors(client: Queryable): Promise<void> {
     );
   }
 }
+
+test('deck admission is hysteretic', () => {
+  const revealed = new Date('2026-01-01T00:00:00.000Z');
+
+  assert.equal(admitsToDeck(80, null), true, 'the entry bar alone admits');
+  assert.equal(admitsToDeck(79, null), false, 'below the bar, never revealed');
+  assert.equal(admitsToDeck(79, revealed), true, 'a revealed pair stays above the exit floor');
+  assert.equal(admitsToDeck(75, revealed), true, 'the exit floor is inclusive');
+  assert.equal(admitsToDeck(74, revealed), false, 'a real fall leaves the deck');
+  assert.equal(admitsToDeck(null, revealed), false, 'no score is never in the deck');
+});
 
 describe('the ranking, against the database', () => {
   before(async () => {
@@ -274,6 +296,54 @@ describe('the ranking, against the database', () => {
     await rescoreForViewer(pool, later, ELIGIBILITY);
     assert.deepEqual(await scoreFor(earlier, later), fromEarlier);
     assert.deepEqual(await scoreFor(later, earlier), fromEarlier);
+  });
+
+  test('reaction timestamps do not change the score', async (t) => {
+    if (!available) {
+      t.skip('no database available');
+      return;
+    }
+
+    const oldViewer = await makeUser('stable-old-viewer@test.local');
+    const oldPartner = await makeUser('stable-old-partner@test.local');
+    const recentViewer = await makeUser('stable-recent-viewer@test.local');
+    const recentPartner = await makeUser('stable-recent-partner@test.local');
+
+    const oldPosts = await Promise.all(
+      Array.from({ length: 5 }, () => makePost(['stable-interest']))
+    );
+    const recentPosts = await Promise.all(
+      Array.from({ length: 5 }, () => makePost(['stable-interest']))
+    );
+    const oldLike = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString();
+    const recentLike = new Date(Date.now() - 1000).toISOString();
+
+    for (const postId of oldPosts) {
+      await likeAt(oldViewer, postId, oldLike);
+      await likeAt(oldPartner, postId, oldLike);
+    }
+    for (const postId of recentPosts) {
+      await likeAt(recentViewer, postId, recentLike);
+      await likeAt(recentPartner, postId, recentLike);
+    }
+
+    await rebuildVectors(pool);
+    // The production rebuild uses reaction timestamps for this metadata. Set
+    // the test vectors explicitly so the test detects any accidental use of age.
+    await pool.query(
+      `UPDATE user_tag_affinity
+          SET last_activity_at = $2
+        WHERE user_id = ANY($1::uuid[])`,
+      [[oldViewer, oldPartner], oldLike]
+    );
+
+    await rescoreForViewer(pool, oldViewer, ELIGIBILITY);
+    await rescoreForViewer(pool, recentViewer, ELIGIBILITY);
+
+    assert.deepEqual(
+      await scoreFor(oldViewer, oldPartner),
+      await scoreFor(recentViewer, recentPartner)
+    );
   });
 
   test('the tag half is a cosine, so a broad taste does not equal a narrow one', async (t) => {
@@ -412,5 +482,74 @@ describe('the ranking, against the database', () => {
             : 'below-50';
 
     assert.equal(stored.band, expected);
+  });
+
+  test('a pair that reaches the deck is revealed once, and the reveal survives rescoring', async (t) => {
+    if (!available) {
+      t.skip('no database available');
+      return;
+    }
+
+    const viewer = await makeUser('deck-viewer@test.local');
+    const partner = await makeUser('deck-partner@test.local');
+    const control = await makeUser('deck-control@test.local');
+
+    // Five photos the pair both like. Their vectors are identical, so the tag
+    // cosine is exactly 1 and the shared-photo half carries them over the
+    // deck's entry score whatever the library happens to look like.
+    const shared = await Promise.all(
+      Array.from({ length: 5 }, () => makePost(['deck-shared-interest']))
+    );
+    for (const post of shared) {
+      await like(viewer, post);
+      await like(partner, post);
+    }
+
+    // The control shares one photo: a real score, but nowhere near the deck.
+    await like(control, shared[0] as string);
+
+    await rebuildVectors(pool);
+    await rescoreForViewer(pool, viewer, ELIGIBILITY);
+
+    const before = await scoreFor(viewer, partner);
+    assert.ok(
+      before.score >= DECK_ENTER_SCORE,
+      `the fixture should cross the entry score (got ${before.score})`
+    );
+
+    const revealedAt = await revealFor(viewer, partner);
+    assert.ok(revealedAt, 'a pair over the entry score is revealed');
+    assert.ok(await revealFor(partner, viewer), 'the reveal belongs to the pair, not one side');
+    assert.equal(await revealFor(viewer, control), null, 'a pair that never crossed is not');
+    assert.ok(
+      (await scoreFor(viewer, control)).score < DECK_ENTER_SCORE,
+      'the control really does sit below the bar'
+    );
+
+    /*
+     * The viewer's taste broadens: three photos the partner has not liked.
+     * The cosine falls and the pair drops below the entry score -- and the
+     * reveal must survive the rescore that says so, because hysteresis is
+     * only as durable as the marker it reads.
+     */
+    const solo = await Promise.all(
+      Array.from({ length: 3 }, (_, i) => makePost([`deck-solo-${i}`]))
+    );
+    for (const post of solo) await like(viewer, post);
+
+    await rebuildVectors(pool);
+    await rescoreForViewer(pool, viewer, ELIGIBILITY);
+
+    const after = await scoreFor(viewer, partner);
+    assert.ok(after.score < before.score, 'broadening one side lowers the pair score');
+    assert.ok(
+      admitsToDeck(after.score, await revealFor(viewer, partner)),
+      'a revealed pair above the exit floor stays in the deck'
+    );
+    assert.equal(
+      (await revealFor(viewer, partner))?.getTime(),
+      revealedAt?.getTime(),
+      "the reveal is the pair's first crossing, not refreshed on every rescore"
+    );
   });
 });

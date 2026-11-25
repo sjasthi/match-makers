@@ -4,9 +4,9 @@ import { useRoute, type RouteProp } from '@react-navigation/native';
 import type { User } from '@match-makers/shared';
 import { ScreenContainer, EmptyState, LoadingState, ErrorBanner, ProfileImage } from '@/components';
 import { useAsync } from '@/hooks/useAsync';
-import { useAuthMode, useCurrentUser } from '@/hooks';
+import { useCurrentUser } from '@/hooks';
 import { getAdminUser } from '@/services/admin';
-import { ageFromDateOfBirth } from '@/utils/mockData';
+import { ageFromDateOfBirth } from '@/utils/date';
 import { hasCoordinates } from '@/utils/distance';
 import { COLORS, SPACING } from '@/constants';
 import type { ProfileStackParamList } from '@/navigation/types';
@@ -24,28 +24,14 @@ type DetailRoute = RouteProp<ProfileStackParamList, 'AdminUserDetail'>;
 export function AdminUserDetailScreen() {
   const route = useRoute<DetailRoute>();
   const { userId } = route.params;
-  const [authMode] = useAuthMode();
   const currentUser = useCurrentUser();
-  const isMock = authMode === 'mock';
 
   const {
     data: user,
     error,
     isLoading,
     refetch,
-  } = useAsync<User | null>(async () => (isMock ? getAdminUser(userId) : null), [isMock, userId]);
-
-  if (!isMock) {
-    return (
-      <ScreenContainer>
-        <EmptyState
-          icon="🔒"
-          title="Mock mode only"
-          message="There is no backend to read a user record from yet. Switch the auth mode back to mock in Settings."
-        />
-      </ScreenContainer>
-    );
-  }
+  } = useAsync<User | null>(() => getAdminUser(userId), [userId]);
 
   if (isLoading) {
     return (
@@ -61,7 +47,7 @@ export function AdminUserDetailScreen() {
         <EmptyState
           icon="🔍"
           title="No such account"
-          message={`Nothing in the mock database is stored under ${userId}.`}
+          message={`No account was found for ${userId}.`}
           actionLabel="Reload"
           onAction={refetch}
         />

@@ -2,7 +2,12 @@ import { getApiClient } from '@/services/api/client';
 import { getAuthAdapter } from '@/services/auth';
 import { mockDb, toPublicUser } from '@/services/mock/database';
 import { simulateLatency, maybeSimulateFailure } from '@/services/mock/network';
-import { scoreCompatibility, type TasteSignal } from '@/utils/matching';
+import {
+  admitsToDeck,
+  DECK_ENTER_SCORE,
+  scoreCompatibility,
+  type TasteSignal,
+} from '@/utils/matching';
 import {
   buildTasteIndex,
   PHOTOS_FOR_FULL_TASTE,
@@ -27,14 +32,15 @@ async function loadTasteIndex(): Promise<TasteIndex> {
 }
 
 /**
- * Builds the deck from mutually eligible profiles with a photo-taste score of
- * at least 80%. A missing or lower score keeps a profile out of Likes.
+ * Builds the deck from mutually eligible profiles, hysteretically: a pair
+ * enters at the deck's entry score and, once revealed, stays until its score
+ * falls below the exit floor. A missing score never enters.
  *
  * Eligibility and scoring are deliberately separate. `mutualGate` decides
  * who is allowed to appear at all, in both directions, and knows nothing about the score;
  * `scoreCompatibility` ranks the people who survived and knows nothing about
- * distance. Only scored candidates at or above 80% appear in the deck. The API
- * route applies the same threshold.
+ * distance. The API route applies the same enter/exit rule against the stored
+ * reveal state, so the mock and the server cannot admit different pairs.
  *
  * Scoring runs before filtering rather than after, so the breakdown that sorts
  * the deck is the same object the cards render. Computing it for people who get
@@ -45,13 +51,22 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
   const adapter = getAuthAdapter();
   const viewer = await adapter.getCurrentUser();
   if (!viewer) {
-    return { items: [], page, pageSize, total: 0, hasMore: false, blockedReason: null, needsTaste: false };
+    return {
+      items: [],
+      page,
+      pageSize,
+      total: 0,
+      hasMore: false,
+      blockedReason: null,
+      needsTaste: false,
+    };
   }
 
-  const [allUsers, swipedIds, taste] = await Promise.all([
+  const [allUsers, swipedIds, taste, revealedIds] = await Promise.all([
     mockDb.allUsers(),
     mockDb.swipedUserIds(viewer.id),
     loadTasteIndex(),
+    mockDb.revealedDeckPartners(viewer.id),
   ]);
 
   const viewerLikes = taste.likeCountByUser.get(viewer.id) ?? 0;
@@ -60,7 +75,11 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     .filter((user) => user.id !== viewer.id)
     .map((user) => ({
       user,
-      breakdown: scoreCompatibility(viewer, toPublicUser(user), tasteSignal(taste, viewer.id, user.id)),
+      breakdown: scoreCompatibility(
+        viewer,
+        toPublicUser(user),
+        tasteSignal(taste, viewer.id, user.id)
+      ),
     }));
 
   const blocked: BlockerCode[] = [];
@@ -95,8 +114,17 @@ async function buildMockFeed(page: number, pageSize: number): Promise<FeedPage> 
     return b.breakdown.score - a.breakdown.score;
   });
 
-  const visibleMatches = eligible.filter(
-    ({ breakdown }) => breakdown.score !== null && breakdown.score >= 80
+  // Reveal pairs as their score crosses the entry bar, mirroring the stored
+  // `revealed_at` on the API: once a pair has been shown, it stays in the deck
+  // until its score falls below the exit floor.
+  for (const { user, breakdown } of eligible) {
+    if (breakdown.score !== null && breakdown.score >= DECK_ENTER_SCORE) {
+      await mockDb.revealDeckPair(viewer.id, user.id);
+    }
+  }
+
+  const visibleMatches = eligible.filter(({ user, breakdown }) =>
+    admitsToDeck(breakdown.score, revealedIds.has(user.id))
   );
 
   const start = (page - 1) * pageSize;

@@ -7,7 +7,6 @@
  */
 import { Client } from 'pg';
 
-import { HALF_LIFE_SECONDS } from '../src/affinity';
 import { TAG_STRENGTH_SQL } from '../src/affinity';
 
 const ELIGIBILITY = `
@@ -25,8 +24,14 @@ const OLD = `
       SELECT GREATEST(0, COALESCE(s.likes, 0)) AS likes
         FROM users u LEFT JOIN user_taste_summary s ON s.user_id = u.id WHERE u.id = $1
     ),
+    library AS (SELECT count(*)::int AS p FROM posts),
+    tag_docs AS (
+      SELECT tag, count(*)::int AS docs FROM posts
+        CROSS JOIN LATERAL unnest(posts.tags) AS tag GROUP BY tag
+    ),
     viewer_pos AS (
       SELECT a.tag, ${STRENGTH} AS strength FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag CROSS JOIN library l
        WHERE a.user_id = $1 AND a.likes > a.dislikes
     ),
     vb AS (
@@ -35,6 +40,7 @@ const OLD = `
     ),
     cand_pos AS (
       SELECT a.user_id, a.tag, ${STRENGTH} AS strength FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag CROSS JOIN library l
        WHERE a.tag IN (SELECT tag FROM viewer_pos) AND a.likes > a.dislikes
     ),
     br AS (
@@ -47,7 +53,7 @@ const OLD = `
        WHERE cp.user_id IN (SELECT id FROM ranked) GROUP BY cp.user_id
     ),
     co AS (
-      SELECT r2.user_id, sum(exp(- extract(epoch FROM (now() - r1.created_at)) * ln(2) / ${HALF_LIFE_SECONDS})) AS co_likes,
+      SELECT r2.user_id, count(*) AS co_likes,
              count(*) AS co_count
         FROM post_reactions r1 JOIN post_reactions r2
           ON r2.post_id = r1.post_id AND r2.action = 'like' AND r2.user_id <> r1.user_id
@@ -80,20 +86,28 @@ const NEW = `
       SELECT GREATEST(0, COALESCE(s.likes, 0)) AS likes
         FROM users u LEFT JOIN user_taste_summary s ON s.user_id = u.id WHERE u.id = $1
     ),
+    library AS (SELECT count(*)::int AS p FROM posts),
+    tag_docs AS (
+      SELECT tag, count(*)::int AS docs FROM posts
+        CROSS JOIN LATERAL unnest(posts.tags) AS tag GROUP BY tag
+    ),
     viewer_pos AS (
       SELECT a.tag, ${STRENGTH} AS strength FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag CROSS JOIN library l
        WHERE a.user_id = $1 AND a.likes > a.dislikes
     ),
     vb AS (SELECT sqrt(COALESCE(sum(strength * strength), 0)) AS norm FROM viewer_pos),
     cand_pos AS (
       SELECT a.user_id, a.tag, ${STRENGTH} AS strength FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag CROSS JOIN library l
        WHERE a.tag IN (SELECT tag FROM viewer_pos) AND a.likes > a.dislikes
     ),
     br AS (
       SELECT a.user_id, sqrt(COALESCE(sum(${STRENGTH} * ${STRENGTH}), 0)) AS norm
         FROM user_tag_affinity a
+        JOIN tag_docs d ON d.tag = a.tag CROSS JOIN library l
        WHERE a.likes > a.dislikes AND a.user_id IN (SELECT id FROM ranked)
-       GROUP BY a.user_id
+       GROUP BY a.user_id, l.p
     ),
     ov AS (
       SELECT cp.user_id, sum(vp.strength * cp.strength) AS earned
@@ -101,7 +115,7 @@ const NEW = `
        WHERE cp.user_id IN (SELECT id FROM ranked) GROUP BY cp.user_id
     ),
     co AS (
-      SELECT r2.user_id, sum(exp(- extract(epoch FROM (now() - r1.created_at)) * ln(2) / ${HALF_LIFE_SECONDS})) AS co_likes,
+      SELECT r2.user_id, count(*) AS co_likes,
              count(*) AS co_count
         FROM post_reactions r1 JOIN post_reactions r2
           ON r2.post_id = r1.post_id AND r2.action = 'like' AND r2.user_id <> r1.user_id

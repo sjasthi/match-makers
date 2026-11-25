@@ -92,12 +92,12 @@ function renderAdmin() {
 async function signInDemo() {
   const adapter = new MockAuthAdapter();
   const result = await adapter.login({ email: DEMO_EMAIL, password: DEMO_PASSWORD });
-  useAuthStore.setState({ user: result.user, state: 'authenticated', authMode: 'mock' });
+  useAuthStore.setState({ user: result.user, state: 'authenticated' });
   return result.user;
 }
 
 beforeEach(async () => {
-  useAuthStore.setState({ state: 'unknown', user: null, error: null, authMode: 'mock' });
+  useAuthStore.setState({ state: 'unknown', user: null, error: null });
   usePhotoFeedStore.getState().reset();
   await flushPendingWrites();
   await mockDb.reset();

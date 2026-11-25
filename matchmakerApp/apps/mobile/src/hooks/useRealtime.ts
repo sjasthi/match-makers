@@ -8,7 +8,6 @@ import {
   type RealtimeNotification,
   type RealtimeStatus,
 } from '@/services/realtime';
-import { useAuthStore } from '@/stores/authStore';
 
 /**
  * Watches for match and message invalidations arriving over the socket.
@@ -21,11 +20,6 @@ import { useAuthStore } from '@/stores/authStore';
  * and reopens the socket, and the notification that prompted the re-render
  * would arrive at a socket that is no longer listening for it.
  *
- * In mock mode nothing is subscribed. There is no server to connect to, and a
- * socket that could never deliver would sit there claiming to be connected --
- * which is worse than not having one, because the fallback that would cover for
- * it would be switched off.
- *
  * Returns the connection status, so a screen can fall back to API polling
  * rather than silently showing stale data.
  */
@@ -37,8 +31,6 @@ export function useRealtimeUpdates(
   const handler = useRef(onUpdate);
   handler.current = onUpdate;
 
-  const authMode = useAuthStore((store) => store.authMode);
-
   useEffect(() => {
     const off = onRealtimeStatus(setStatus);
     return () => {
@@ -46,10 +38,10 @@ export function useRealtimeUpdates(
     };
   }, []);
 
-  useEffect(() => {
-    if (authMode !== 'jwt') return undefined;
-    return subscribeToUpdates((notification) => handler.current(notification), matchId);
-  }, [authMode, matchId]);
+  useEffect(
+    () => subscribeToUpdates((notification) => handler.current(notification), matchId),
+    [matchId]
+  );
 
   return status;
 }

@@ -3,8 +3,21 @@ import { StyleSheet, View } from 'react-native';
 import { Text, TextInput } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { bioSchema, dateOfBirthSchema, nameSchema, type Photo } from '@match-makers/shared';
-import { ScreenContainer, PrimaryButton, ErrorBanner, PhotoManager } from '@/components';
+import {
+  RelationshipGoal,
+  bioSchema,
+  dateOfBirthSchema,
+  nameSchema,
+  type Photo,
+} from '@match-makers/shared';
+import {
+  ScreenContainer,
+  PrimaryButton,
+  ErrorBanner,
+  PhotoManager,
+  SelectChips,
+  type ChipOption,
+} from '@/components';
 import { useCurrentUser } from '@/hooks';
 import { useAuthStore } from '@/stores/authStore';
 import { updateProfile } from '@/services/profile';
@@ -14,6 +27,14 @@ import type { RootStackParamList } from '@/navigation/types';
 
 const FIELD_STYLE = { backgroundColor: COLORS.background };
 
+const GOAL_OPTIONS: ReadonlyArray<ChipOption<RelationshipGoal>> = [
+  { value: RelationshipGoal.LONG_TERM, label: 'Long term' },
+  { value: RelationshipGoal.SHORT_TERM, label: 'Short term' },
+  { value: RelationshipGoal.CASUAL, label: 'Casual' },
+  { value: RelationshipGoal.FRIENDSHIP, label: 'Friendship' },
+  { value: RelationshipGoal.NOT_SURE, label: 'Not sure yet' },
+];
+
 export function EditProfileScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const user = useCurrentUser();
@@ -22,6 +43,9 @@ export function EditProfileScreen() {
   const [name, setName] = useState(user?.name ?? '');
   const [bio, setBio] = useState(user?.bio ?? '');
   const [dateOfBirth, setDateOfBirth] = useState(user?.dateOfBirth ?? '');
+  const [relationshipGoal, setRelationshipGoal] = useState(
+    user?.relationshipGoal ?? RelationshipGoal.NOT_SURE
+  );
   const [city, setCity] = useState(user?.location.city ?? '');
   const [country, setCountry] = useState(user?.location.country ?? '');
   const [photos, setPhotos] = useState<Photo[]>(user?.photos ?? []);
@@ -58,6 +82,7 @@ export function EditProfileScreen() {
         name: parsedName.data,
         bio: parsedBio.data,
         dateOfBirth: parsedDob.data,
+        relationshipGoal,
         photos,
         location: {
           ...user?.location,
@@ -109,6 +134,16 @@ export function EditProfileScreen() {
         <Text variant="bodySmall" style={styles.counter}>
           {bio.length}/500
         </Text>
+
+        <SelectChips
+          label="My relationship goal"
+          options={GOAL_OPTIONS}
+          selected={[relationshipGoal]}
+          onToggle={setRelationshipGoal}
+          multiple={false}
+          helperText="Not sure is a distinct goal, not the same as Any."
+          testID="profile-relationship-goal"
+        />
 
         <TextInput
           mode="outlined"
